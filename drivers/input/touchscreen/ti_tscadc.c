@@ -104,7 +104,7 @@ struct tscadc {
 	int			wires;
 	int			analog_input;
 	int			x_plate_resistance;
-	struct clk		*clk;
+	struct clk		*tsc_ick;
 	int			irq;
 	void __iomem		*tsc_base;
 };
@@ -379,7 +379,7 @@ static	int __devinit tscadc_probe(struct platform_device *pdev)
 	int				clock_rate, irqenable, ctrl;
 	struct	tsc_data		*pdata = pdev->dev.platform_data;
 	struct resource			*res;
-	struct clk			*tsc_ick;
+	struct clk			*clk;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -408,6 +408,13 @@ static	int __devinit tscadc_probe(struct platform_device *pdev)
 	}
 	ts_dev->input = input_dev;
 
+	res =  request_mem_region(res->start, resource_size(res), pdev->name);
+	if (!res) {
+		dev_err(&pdev->dev, "failed to reserve registers.\n");
+		err = -EBUSY;
+		goto err_free_mem;
+	}
+
 	ts_dev->tsc_base = ioremap(res->start, resource_size(res));
 	if (!ts_dev->tsc_base) {
 		dev_err(&pdev->dev, "failed to map registers.\n");
@@ -422,20 +429,20 @@ static	int __devinit tscadc_probe(struct platform_device *pdev)
 		goto err_unmap_regs;
 	}
 
-	tsc_ick = clk_get(&pdev->dev, "adc_tsc_ick");
-	if (IS_ERR(tsc_ick)) {
+	ts_dev->tsc_ick = clk_get(&pdev->dev, "adc_tsc_ick");
+	if (IS_ERR(ts_dev->tsc_ick)) {
 		dev_err(&pdev->dev, "failed to get TSC ick\n");
 		goto err_free_irq;
 	}
-	clk_enable(tsc_ick);
+	clk_enable(ts_dev->tsc_ick);
 
-	ts_dev->clk = clk_get(&pdev->dev, "adc_tsc_fck");
-	if (IS_ERR(ts_dev->clk)) {
+	clk = clk_get(&pdev->dev, "adc_tsc_fck");
+	if (IS_ERR(clk)) {
 		dev_err(&pdev->dev, "failed to get TSC fck\n");
-		err = PTR_ERR(ts_dev->clk);
+		err = PTR_ERR(clk);
 		goto err_free_irq;
 	}
-	clock_rate = clk_get_rate(ts_dev->clk);
+	clock_rate = clk_get_rate(clk);
 	clk_value = clock_rate / ADC_CLK;
 	if (clk_value < 7) {
 		dev_err(&pdev->dev, "clock input less than min clock requirement\n");
@@ -498,11 +505,12 @@ static	int __devinit tscadc_probe(struct platform_device *pdev)
 	if (err)
 		goto err_fail;
 
+	platform_set_drvdata(pdev, ts_dev);
 	return 0;
 
 err_fail:
-	clk_disable(ts_dev->clk);
-	clk_put(ts_dev->clk);
+	clk_disable(ts_dev->tsc_ick);
+	clk_put(ts_dev->tsc_ick);
 err_free_irq:
 	free_irq(ts_dev->irq, ts_dev);
 err_unmap_regs:
@@ -517,7 +525,7 @@ err_free_mem:
 
 static int __devexit tscadc_remove(struct platform_device *pdev)
 {
-	struct tscadc		*ts_dev = dev_get_drvdata(&pdev->dev);
+	struct tscadc		*ts_dev = platform_get_drvdata(pdev);
 	struct resource		*res;
 
 	free_irq(ts_dev->irq, ts_dev);
@@ -528,11 +536,12 @@ static int __devexit tscadc_remove(struct platform_device *pdev)
 	iounmap(ts_dev->tsc_base);
 	release_mem_region(res->start, resource_size(res));
 
-	clk_disable(ts_dev->clk);
-	clk_put(ts_dev->clk);
+	clk_disable(ts_dev->tsc_ick);
+	clk_put(ts_dev->tsc_ick);
 
 	kfree(ts_dev);
 
+	platform_set_drvdata(pdev, NULL);
 	return 0;
 }
 
@@ -541,6 +550,7 @@ static struct platform_driver ti_tsc_driver = {
 	.remove	 = __devexit_p(tscadc_remove),
 	.driver	 = {
 		.name   = "tsc",
+		.owner  = THIS_MODULE,
 	},
 };
 
@@ -548,11 +558,15 @@ static int __init ti_tsc_init(void)
 {
 	return platform_driver_register(&ti_tsc_driver);
 }
+module_init(ti_tsc_init);
 
 static void __exit ti_tsc_exit(void)
 {
 	platform_driver_unregister(&ti_tsc_driver);
 }
-
-module_init(ti_tsc_init);
 module_exit(ti_tsc_exit);
+
+MODULE_DESCRIPTION("TI touchscreen controller driver");
+MODULE_AUTHOR("Rachna Patil <rachna@ti.com>");
+MODULE_LICENSE("GPL");
+
