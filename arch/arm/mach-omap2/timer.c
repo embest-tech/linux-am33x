@@ -333,12 +333,22 @@ static void notrace dmtimer_update_sched_clock(void)
 	update_sched_clock(&cd, cyc, (u32)~0);
 }
 
+static u32 notrace dmtimer_read_sched_clock(void)
+{
+	if (clksrc.reserved)
+		return __omap_dm_timer_read_counter(&clksrc, 1);
+
+	return 0;
+}
+
 unsigned long long notrace sched_clock(void)
 {
 	u32 cyc = 0;
 
-	if (clksrc.reserved)
-		cyc = __omap_dm_timer_read_counter(&clksrc, 1);
+	if (cd.suspended)
+		return cd.epoch_ns;
+
+	cyc = dmtimer_read_sched_clock();
 
 	return cyc_to_sched_clock(&cd, cyc, (u32)~0);
 }
@@ -358,6 +368,7 @@ static void __init omap2_gp_clocksource_init(int gptimer_id,
 	__omap_dm_timer_load_start(&clksrc,
 			OMAP_TIMER_CTRL_ST | OMAP_TIMER_CTRL_AR, 0, 1);
 	init_sched_clock(&cd, dmtimer_update_sched_clock, 32, clksrc.rate);
+	setup_sched_clock_read(dmtimer_read_sched_clock);
 
 	if (clocksource_register_hz(&clocksource_gpt, clksrc.rate))
 		pr_err("Could not register clocksource %s\n",

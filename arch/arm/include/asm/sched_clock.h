@@ -17,6 +17,7 @@ struct clock_data {
 	u32 epoch_cyc_copy;
 	u32 mult;
 	u32 shift;
+	bool suspended;
 };
 
 #define DEFINE_CLOCK_DATA(name)	struct clock_data name
@@ -97,6 +98,12 @@ static inline unsigned long long cyc_to_sched_clock(struct clock_data *cd,
  */
 void init_sched_clock(struct clock_data *, void (*)(void),
 	unsigned int, unsigned long);
+
+/*
+ * Expose the platform's sched clock read function to common sched
+ * clock code
+ */
+void setup_sched_clock_read(u32 (*read)(void));
 
 /*
  * Use this initialization function rather than init_sched_clock() if
