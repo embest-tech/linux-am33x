@@ -774,6 +774,9 @@ static void _configure_device(int evm_id, struct evm_dev_cfg *dev_cfg,
 {
 	int i;
 
+	/* Fillup global evmid */
+	am33xx_evmid_fillup(evm_id);
+
 	/*
 	* Only General Purpose & Industrial Auto Motro Control
 	* EVM has profiles. So check if this evm has profile.
@@ -1904,9 +1907,6 @@ static void setup_ind_auto_motor_ctrl_evm(void)
 	_configure_device(IND_AUT_MTR_EVM, ind_auto_mtrl_evm_dev_cfg,
 		PROFILE_0);
 
-	/* Fillup global evmid */
-	am33xx_evmid_fillup(IND_AUT_MTR_EVM);
-
 }
 
 /* BeagleBone < Rev A3 */
@@ -1923,8 +1923,6 @@ static void setup_beaglebone_old(void)
 	phy_register_fixup_for_uid(BBB_PHY_ID, BBB_PHY_MASK,
 					beaglebone_phy_fixup);
 
-	/* Fill up global evmid */
-	am33xx_evmid_fillup(BEAGLE_BONE_OLD);
 }
 
 /* BeagleBone after Rev A3 */
@@ -1940,8 +1938,6 @@ static void setup_beaglebone(void)
 	/* TPS65217 regulator has full constraints */
 	regulator_has_full_constraints();
 
-	/* Fill up global evmid */
-	am33xx_evmid_fillup(BEAGLE_BONE_A3);
 }
 
 /* EVM - Starter Kit */
