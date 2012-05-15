@@ -945,6 +945,7 @@ static void lcdc_init(int evm_id, int profile)
 	}
 	switch (evm_id) {
 	case GEN_PURP_EVM:
+	case GEN_PURP_DDR3_EVM:
 		lcdc_pdata = &TFC_S9700RTWV35TR_01B_pdata;
 		break;
 	case EVM_SK:
@@ -1565,6 +1566,7 @@ static void d_can_init(int evm_id, int profile)
 		}
 		break;
 	case GEN_PURP_EVM:
+	case GEN_PURP_DDR3_EVM:
 		if (profile == PROFILE_1) {
 			setup_pin_mux(d_can_gp_pin_mux);
 			/* Instance One */
@@ -1871,7 +1873,14 @@ static struct evm_dev_cfg evm_sk_dev_cfg[] = {
 static void setup_general_purpose_evm(void)
 {
 	u32 prof_sel = am335x_get_profile_selection();
-	pr_info("The board is general purpose EVM in profile %d\n", prof_sel);
+	u32 boardId = GEN_PURP_EVM;
+
+	if (!strncmp("SKU#04", config.opt, 6))
+		boardId = GEN_PURP_DDR3_EVM;
+
+	pr_info("The board is general purpose EVM %sin profile %d\n",
+			((boardId == GEN_PURP_DDR3_EVM) ? "with DDR3 " : ""),
+			prof_sel);
 
 	if (!strncmp("1.1A", config.version, 4)) {
 		gp_evm_revision = GP_EVM_REV_IS_1_1A;
@@ -1887,7 +1896,7 @@ static void setup_general_purpose_evm(void)
 	else if (gp_evm_revision == GP_EVM_REV_IS_1_1A)
 		gigabit_enable = 1;
 
-	_configure_device(GEN_PURP_EVM, gen_purp_evm_dev_cfg, (1L << prof_sel));
+	_configure_device(boardId, gen_purp_evm_dev_cfg, (1L << prof_sel));
 }
 
 static void setup_ind_auto_motor_ctrl_evm(void)
@@ -2039,6 +2048,8 @@ static void am335x_evm_setup(struct memory_accessor *mem_acc, void *context)
 			setup_general_purpose_evm();
 		else if (!strncmp("SKU#02", config.opt, 6))
 			setup_ind_auto_motor_ctrl_evm();
+		else if (!strncmp("SKU#04", config.opt, 6))
+			setup_general_purpose_evm();
 		else
 			goto out;
 	}
