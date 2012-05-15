@@ -1293,7 +1293,7 @@ static struct platform_device am33xx_cpsw_device = {
 
 static unsigned char  am33xx_macid0[ETH_ALEN];
 static unsigned char  am33xx_macid1[ETH_ALEN];
-static unsigned int   am33xx_evmid = GEN_PURP_EVM;
+static unsigned int   am33xx_evmid = -EAGAIN;
 
 /*
 * am33xx_evmid_fillup - set up board evmid
@@ -1307,11 +1307,21 @@ void am33xx_evmid_fillup(unsigned int evmid)
 	return;
 }
 
-unsigned int get_am33xx_evmid(void)
+/*
+* am335x_evm_get_id - returns Board Type (EVM/BB/EVM-SK ...)
+*
+* Note:
+*	returns -EAGAIN if Board detection hasn't happened yet. User should
+*	try again in case of failure.
+*
+* This function will eventually go away when DT based probe
+* of each board happens
+*/
+unsigned int am335x_evm_get_id(void)
 {
 	return am33xx_evmid;
 }
-EXPORT_SYMBOL(get_am33xx_evmid);
+EXPORT_SYMBOL(am335x_evm_get_id);
 
 /*
 * am33xx_cpsw_macidfillup - setup mac adrresses
