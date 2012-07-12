@@ -45,6 +45,7 @@ struct am33xx_padconf_regs {
 	u32 val;
 };
 
+#ifdef CONFIG_SUSPEND
 static struct am33xx_padconf_regs am33xx_lp_padconf[] = {
 	{.offset = AM33XX_CONTROL_GMII_SEL_OFFSET},
 	{.offset = AM33XX_CONTROL_PADCONF_GPMC_A0_OFFSET},
@@ -81,6 +82,7 @@ static struct am33xx_padconf_regs am33xx_lp_padconf[] = {
 	{.offset = AM33XX_CONTROL_PADCONF_MDIO_DATA_OFFSET},
 	{.offset = AM33XX_CONTROL_PADCONF_MDIO_CLK_OFFSET},
 };
+#endif /* CONFIG_SUSPEND */
 #endif /* ASSEMBLER */
 
 #define M3_TXEV_EOI			(AM33XX_CTRL_BASE + 0x1324)
