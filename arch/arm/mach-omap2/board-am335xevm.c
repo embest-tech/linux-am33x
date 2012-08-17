@@ -150,6 +150,7 @@ struct da8xx_lcdc_platform_data  NHD_480272MF_ATXI_pdata = {
 static struct tsc_data am335x_touchscreen_data  = {
 	.wires  = 4,
 	.x_plate_resistance = 200,
+	.steps_to_configure = 5,
 };
 
 static u8 am335x_iis_serializer_direction1[] = {
