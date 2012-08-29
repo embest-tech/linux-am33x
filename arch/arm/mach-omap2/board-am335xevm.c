@@ -37,6 +37,7 @@
 #include <linux/mfd/tps65217.h>
 #include <linux/pwm_backlight.h>
 #include <linux/input/ti_tsc.h>
+#include <linux/mfd/ti_tscadc.h>
 #include <linux/reboot.h>
 #include <linux/pwm/pwm.h>
 #include <linux/opp.h>
@@ -151,6 +152,10 @@ static struct tsc_data am335x_touchscreen_data  = {
 	.wires  = 4,
 	.x_plate_resistance = 200,
 	.steps_to_configure = 5,
+};
+
+static struct mfd_tscadc_board tscadc = {
+	.tsc_init = &am335x_touchscreen_data,
 };
 
 static u8 am335x_iis_serializer_direction1[] = {
@@ -444,7 +449,7 @@ static struct pinmux_config lcdc_pin_mux[] = {
 	{NULL, 0},
 };
 
-static struct pinmux_config tsc_pin_mux[] = {
+static struct pinmux_config tscadc_pin_mux[] = {
 	{"ain0.ain0",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
 	{"ain1.ain1",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
 	{"ain2.ain2",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
@@ -1067,12 +1072,12 @@ static void lcdc_init(int evm_id, int profile)
 	return;
 }
 
-static void tsc_init(int evm_id, int profile)
+static void mfd_tscadc_init(int evm_id, int profile)
 {
 	int err;
 
-	setup_pin_mux(tsc_pin_mux);
-	err = am33xx_register_tsc(&am335x_touchscreen_data);
+	setup_pin_mux(tscadc_pin_mux);
+	err = am33xx_register_mfd_tscadc(&tscadc);
 	if (err)
 		pr_err("failed to register touchscreen device\n");
 }
@@ -1966,7 +1971,7 @@ static struct evm_dev_cfg gen_purp_evm_dev_cfg[] = {
 						PROFILE_2 | PROFILE_7) },
 	{lcdc_init,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
 						PROFILE_2 | PROFILE_7) },
-	{tsc_init,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
+	{mfd_tscadc_init,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
 						PROFILE_2 | PROFILE_7) },
 	{rgmii1_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{rgmii2_init,	DEV_ON_DGHTR_BRD, (PROFILE_1 | PROFILE_2 |
@@ -2038,7 +2043,7 @@ static struct evm_dev_cfg evm_sk_dev_cfg[] = {
 	{rgmii2_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{lcdc_init,     DEV_ON_BASEBOARD, PROFILE_ALL},
 	{enable_ecap2,     DEV_ON_BASEBOARD, PROFILE_ALL},
-	{tsc_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
+	{mfd_tscadc_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{gpio_keys_init,  DEV_ON_BASEBOARD, PROFILE_ALL},
 	{gpio_led_init,  DEV_ON_BASEBOARD, PROFILE_ALL},
 	{lis331dlh_init, DEV_ON_BASEBOARD, PROFILE_ALL},
