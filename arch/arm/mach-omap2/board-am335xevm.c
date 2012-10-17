@@ -1497,6 +1497,7 @@ static struct regulator_init_data tps65217_regulator_data[] = {
 
 static struct tps65217_board beaglebone_tps65217_info = {
 	.tps65217_init_data = &tps65217_regulator_data[0],
+	.status_off = true,
 };
 
 static struct lis3lv02d_platform_data lis331dlh_pdata = {
