@@ -37,6 +37,7 @@
 #include <linux/mfd/tps65217.h>
 #include <linux/pwm_backlight.h>
 #include <linux/input/ti_tsc.h>
+#include <linux/platform_data/ti_adc.h>
 #include <linux/mfd/ti_tscadc.h>
 #include <linux/reboot.h>
 #include <linux/pwm/pwm.h>
@@ -155,8 +156,13 @@ static struct tsc_data am335x_touchscreen_data  = {
 	.steps_to_configure = 5,
 };
 
+static struct adc_data am335x_adc_data = {
+	.adc_channels = 4,
+};
+
 static struct mfd_tscadc_board tscadc = {
 	.tsc_init = &am335x_touchscreen_data,
+	.adc_init = &am335x_adc_data,
 };
 
 static u8 am335x_iis_serializer_direction1[] = {
