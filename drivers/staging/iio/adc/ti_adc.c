@@ -69,7 +69,6 @@ static void adc_step_config(struct adc_device *adc_dev)
 				TSCADC_STEPCONFIG_OPENDLY);
 		channels++;
 	}
-	adc_writel(adc_dev, TSCADC_REG_SE, TSCADC_STPENB_STEPENB);
 }
 
 static int tiadc_channel_init(struct iio_dev *idev, struct adc_device *adc_dev)
@@ -104,23 +103,73 @@ static void tiadc_channel_remove(struct iio_dev *idev)
 	kfree(idev->channels);
 }
 
+/*
+ * Analog inputs (AIN0 - AIN7)
+ * are mapped to steps applied.
+ */
+static int map_channel(int val)
+{
+	int tmpid = 0;
+
+	switch (val) {
+	case 0:
+		tmpid = 8;
+		break;
+	case 1:
+		tmpid = 9;
+		break;
+	case 2:
+		tmpid = 10;
+		break;
+	case 3:
+		tmpid = 11;
+		break;
+	case 4:
+		tmpid = 12;
+		break;
+	case 5:
+		tmpid = 13;
+		break;
+	case 6:
+		tmpid = 14;
+		break;
+	case 7:
+		tmpid = 15;
+		break;
+	}
+	return tmpid;
+}
+
 static int tiadc_read_raw(struct iio_dev *idev,
 		struct iio_chan_spec const *chan,
 		int *val, int *val2, long mask)
 {
 	struct adc_device *adc_dev = iio_priv(idev);
-	int i;
-	unsigned int fifo1count, readx1;
+	int i, map_val;
+	unsigned int fifo1count, readx1, stepid;
+	unsigned long jiffies_end;
+
+	adc_writel(adc_dev, TSCADC_REG_SE, TSCADC_STPENB_STEPENB);
+
+	/* Wait for ADC sequencer to complete sampling */
+	jiffies_end = jiffies + (HZ / 100);
+	while (adc_readl(adc_dev, TSCADC_REG_ADCFSM) & 0x20) {
+		if (time_after(jiffies, jiffies_end))
+			return -EAGAIN;
+	}
 
 	fifo1count = adc_readl(adc_dev, TSCADC_REG_FIFO1CNT);
 	for (i = 0; i < fifo1count; i++) {
 		readx1 = adc_readl(adc_dev, TSCADC_REG_FIFO1);
-		if (i == chan->channel) {
+		stepid = readx1 & 0xf0000;
+		stepid = stepid >> 0x10;
+
+		map_val = map_channel(chan->channel);
+		if (stepid == map_val) {
 			readx1 = readx1 & 0xfff;
 			*val = readx1;
 		}
 	}
-	adc_writel(adc_dev, TSCADC_REG_SE, TSCADC_STPENB_STEPENB);
 	return IIO_VAL_INT;
 }
 
