@@ -196,8 +196,6 @@ int __init am33xx_register_tsc(struct tsc_data *pdata)
 	return 0;
 }
 
-#if defined(CONFIG_SND_AM335X_SOC_EVM) || \
-				defined(CONFIG_SND_AM335X_SOC_EVM_MODULE)
 int __init am335x_register_mcasp(struct snd_platform_data *pdata, int ctrl_nr)
 {
 	int l;
@@ -220,13 +218,6 @@ int __init am335x_register_mcasp(struct snd_platform_data *pdata, int ctrl_nr)
 			dev_name, oh->name);
 	return IS_ERR(pdev) ? PTR_ERR(pdev) : 0;
 }
-
-#else
-int __init am335x_register_mcasp(struct snd_platform_data *pdata, int ctrl_nr)
-{
-	return 0;
-}
-#endif
 
 #if (defined(CONFIG_SND_AM33XX_SOC) || (defined(CONFIG_SND_AM33XX_SOC_MODULE)))
 struct platform_device am33xx_pcm_device = {
