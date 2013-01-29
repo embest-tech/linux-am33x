@@ -65,3 +65,5 @@ obj-$(CONFIG_JS_RTC)		+= js-rtc.o
 js-rtc-y = rtc.o
 
 obj-$(CONFIG_TILE_SROM)		+= tile-srom.o
+obj-$(CONFIG_MACH_DEVKIT8600)   += io_ctl.o
+obj-$(CONFIG_MACH_SBC8600)      += buzzer_ctl.o

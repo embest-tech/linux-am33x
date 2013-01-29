@@ -2240,7 +2240,7 @@ config FB_DA8XX
 
 config FB_DA8XX_CONSISTENT_DMA_SIZE
 	int "Consistent DMA memory size (MB)"
-	depends on (FB_DA8XX && MACH_AM335XEVM)
+	depends on (FB_DA8XX && (MACH_AM335XEVM || MACH_DEVKIT8600 || MACH_SBC8600))
 	range 1 14
 	default 4
 	help
@@ -2248,6 +2248,24 @@ config FB_DA8XX_CONSISTENT_DMA_SIZE
 	  memory needs, for example if you want to use multiple planes.
 	  The size must be 2MB aligned.
 	  If unsure say 1.
+
+choice
+        prompt PANEL_TYPE
+        depends on MACH_DEVKIT8600
+        default LCD_43inch
+
+config LCD_43inch
+        bool "4.3 inch LCD support"
+
+config LCD_7inch
+        bool "7 inch LCD support"
+
+config VGA
+        bool "VGA support"
+
+config LVDS
+        bool "LVDS support"
+endchoice
 
 config FB_VIRTUAL
 	tristate "Virtual Frame Buffer support (ONLY FOR TESTING!)"

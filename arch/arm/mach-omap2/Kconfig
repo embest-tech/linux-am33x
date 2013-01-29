@@ -347,6 +347,11 @@ config MACH_SBC8600
         depends on SOC_OMAPAM33XX
         default y
 
+config MACH_DEVKIT8600
+        bool "DEVKIT8600 Board"
+        depends on SOC_OMAPAM33XX
+        default y
+
 config MACH_OMAP_4430SDP
 	bool "OMAP 4430 SDP board"
 	default y
