@@ -117,19 +117,35 @@ static struct lcd_ctrl_config lcd_cfg = {
 	.raster_order		= 0,
 };
 
-struct da8xx_lcdc_platform_data am335x_lcd_pdata = {
-        .manu_name              = "InnoLux",
-        .controller_data        = &lcd_cfg,
-#if defined(CONFIG_LCD_43inch)
-        .type                   = "4.3inch_LCD",
-#elif defined(CONFIG_LCD_7inch)
-        .type                   = "7inch_LCD",
-#elif defined(CONFIG_VGA)
-        .type                   = "VGA",
-#elif defined(CONFIG_LVDS)
-        .type                   = "LVDS",
-#endif
+struct da8xx_lcdc_platform_data am335x_lcd_pdata[] = {
+        {
+                .manu_name              = "InnoLux",
+                .controller_data        = &lcd_cfg,
+                .type                   = "4.3inch_LCD",
+        }, {
+                .manu_name              = "InnoLux",
+                .controller_data        = &lcd_cfg,
+                .type                   = "7inch_LCD",
+        }, {
+                .manu_name              = "InnoLux",
+                .controller_data        = &lcd_cfg,
+                .type                   = "VGA",
+        }, {
+                .manu_name              = "InnoLux",
+                .controller_data        = &lcd_cfg,
+                .type                   = "LVDS",
+        },
 };
+
+static char lcd_type[11];
+
+static int __init lcd_type_init(char* s) {
+
+        strncpy(lcd_type, s, 11);
+        return 0;
+}
+
+__setup("dispmode=", lcd_type_init);
 
 #include "common.h"
 
@@ -822,18 +838,31 @@ out:
 
 static void lcdc_init(int evm_id, int profile)
 {
-	setup_pin_mux(lcdc_pin_mux);
+        struct da8xx_lcdc_platform_data *lcdc_pdata = NULL;
+        int i;
 
-	if (conf_disp_pll(300000000)) {
-		pr_info("Failed configure display PLL, not attempting to"
-				"register LCDC\n");
-		return;
-	}
+        setup_pin_mux(lcdc_pin_mux);
 
-        if (am33xx_register_lcdc(&am335x_lcd_pdata))
+        if (conf_disp_pll(300000000)) {
+                pr_info("Failed configure display PLL, not attempting to"
+                                "register LCDC\n");
+                return;
+        }
+
+        for(i=0; i<ARRAY_SIZE(am335x_lcd_pdata); i++) {
+                if(!strcmp(lcd_type, am335x_lcd_pdata[i].type))
+                        lcdc_pdata = &am335x_lcd_pdata[i];
+        }
+
+        if(!lcdc_pdata) {
+                pr_err("invalid type of lcd, set to default!\n");
+                lcdc_pdata = &am335x_lcd_pdata[0];
+        }
+
+        if (am33xx_register_lcdc(lcdc_pdata))
                 pr_info("Failed to register LCDC device\n");
 
-	return;
+        return;
 }
 
 static void tsc_init(int evm_id, int profile)
