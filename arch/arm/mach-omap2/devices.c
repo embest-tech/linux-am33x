@@ -25,7 +25,7 @@
 #include <linux/can/platform/d_can.h>
 #include <linux/platform_data/uio_pruss.h>
 #include <linux/pwm/pwm.h>
-#include <linux/input/ti_tscadc.h>
+#include <linux/mfd/ti_tscadc.h>
 
 #include <mach/hardware.h>
 #include <mach/irqs.h>
@@ -174,22 +174,22 @@ int __init am33xx_register_lcdc(struct da8xx_lcdc_platform_data *pdata)
 	return 0;
 }
 
-int __init am33xx_register_tsc(struct tsc_data *pdata)
+int __init am33xx_register_mfd_tscadc(struct mfd_tscadc_board *pdata)
 {
 	int id = -1;
 	struct platform_device *pdev;
 	struct omap_hwmod *oh;
 	char *oh_name = "adc_tsc";
-	char *dev_name = "tsc";
+	char *dev_name = "ti_tscadc";
 
 	oh = omap_hwmod_lookup(oh_name);
 	if (!oh) {
-		pr_err("Could not look up TSC%d hwmod\n", id);
+		pr_err("Could not look up TSCADC%d hwmod\n", id);
 		return -ENODEV;
 	}
 
 	pdev = omap_device_build(dev_name, id, oh, pdata,
-			sizeof(struct tsc_data), NULL, 0, 0);
+			sizeof(struct mfd_tscadc_board), NULL, 0, 0);
 
 	WARN(IS_ERR(pdev), "Can't build omap_device for %s:%s.\n",
 			dev_name, oh->name);
@@ -998,14 +998,14 @@ int map_xbar_event_to_channel(unsigned int event, unsigned int *channel,
 		/* confirm the range */
 		if (*channel < EDMA_MAX_DMACH)
 			clear_bit(*channel, edma_cc[ctrl]->edma_unused);
-		mask = (*channel)%4;
 		offset = (*channel)/4;
 		offset *= 4;
-		offset += mask;
 		val = (unsigned int)__raw_readl(AM33XX_CTRL_REGADDR(
 					AM33XX_SCM_BASE_EDMA + offset));
-		val = val & (~(0xFF));
-		val = val | (xbar_event_mapping[xbar_evt_no].xbar_event_no);
+		mask = *channel & 0x3;
+		mask <<= 3;
+		val &= ~(0xFF << mask);
+		val |= xbar_event_mapping[xbar_evt_no].xbar_event_no << mask;
 		__raw_writel(val,
 			AM33XX_CTRL_REGADDR(AM33XX_SCM_BASE_EDMA + offset));
 		return 0;
@@ -1189,13 +1189,13 @@ arch_initcall(omap2_init_devices);
 /* TODO : Verify the offsets */
 static struct cpsw_slave_data am33xx_cpsw_slaves[] = {
 	{
-		.slave_reg_ofs  = 0x208,
+		.slave_reg_ofs  = 0x200,
 		.sliver_reg_ofs = 0xd80,
 		.phy_id		= "0:00",
 		.dual_emac_reserved_vlan = CPSW_PORT_VLAN_SLAVE_0,
 	},
 	{
-		.slave_reg_ofs  = 0x308,
+		.slave_reg_ofs  = 0x300,
 		.sliver_reg_ofs = 0xdc0,
 		.phy_id		= "0:01",
 		.dual_emac_reserved_vlan = CPSW_PORT_VLAN_SLAVE_1,
@@ -1212,6 +1212,9 @@ static struct cpsw_platform_data am33xx_cpsw_pdata = {
 	.ale_entries		= 1024,
 	.host_port_reg_ofs      = 0x108,
 	.hw_stats_reg_ofs       = 0x900,
+	.cpts_reg_ofs		= 0xc00,
+	.cpts_clock_mult	= 0x80000000,
+	.cpts_clock_shift	= 29,
 	.bd_ram_ofs		= 0x2000,
 	.bd_ram_size		= SZ_8K,
 	.rx_descs               = 64,

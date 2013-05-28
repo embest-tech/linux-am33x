@@ -36,9 +36,11 @@
 #include <linux/mfd/tps65910.h>
 #include <linux/mfd/tps65217.h>
 #include <linux/pwm_backlight.h>
-#include <linux/input/ti_tscadc.h>
+#include <linux/input/ti_tsc.h>
+#include <linux/mfd/ti_tscadc.h>
 #include <linux/reboot.h>
 #include <linux/pwm/pwm.h>
+#include <linux/rtc/rtc-omap.h>
 #include <linux/opp.h>
 
 /* LCD controller is similar to DA850 */
@@ -150,6 +152,11 @@ struct da8xx_lcdc_platform_data  NHD_480272MF_ATXI_pdata = {
 static struct tsc_data am335x_touchscreen_data  = {
 	.wires  = 4,
 	.x_plate_resistance = 200,
+	.steps_to_configure = 5,
+};
+
+static struct mfd_tscadc_board tscadc = {
+	.tsc_init = &am335x_touchscreen_data,
 };
 
 static u8 am335x_iis_serializer_direction1[] = {
@@ -440,16 +447,6 @@ static struct pinmux_config lcdc_pin_mux[] = {
 	{"lcd_hsync.lcd_hsync",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT},
 	{"lcd_pclk.lcd_pclk",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT},
 	{"lcd_ac_bias_en.lcd_ac_bias_en", OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT},
-	{NULL, 0},
-};
-
-static struct pinmux_config tsc_pin_mux[] = {
-	{"ain0.ain0",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
-	{"ain1.ain1",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
-	{"ain2.ain2",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
-	{"ain3.ain3",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
-	{"vrefp.vrefp",         OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
-	{"vrefn.vrefn",         OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
 	{NULL, 0},
 };
 
@@ -996,6 +993,7 @@ static int __init backlight_init(void)
 
 		switch (am335x_evm_get_id()) {
 		case GEN_PURP_EVM:
+		case GEN_PURP_DDR3_EVM:
 			ecap_index = 0;
 			break;
 		case EVM_SK:
@@ -1050,6 +1048,7 @@ static void lcdc_init(int evm_id, int profile)
 	}
 	switch (evm_id) {
 	case GEN_PURP_EVM:
+	case GEN_PURP_DDR3_EVM:
 		lcdc_pdata = &TFC_S9700RTWV35TR_01B_pdata;
 		break;
 	case EVM_SK:
@@ -1066,12 +1065,11 @@ static void lcdc_init(int evm_id, int profile)
 	return;
 }
 
-static void tsc_init(int evm_id, int profile)
+static void mfd_tscadc_init(int evm_id, int profile)
 {
 	int err;
 
-	setup_pin_mux(tsc_pin_mux);
-	err = am33xx_register_tsc(&am335x_touchscreen_data);
+	err = am33xx_register_mfd_tscadc(&tscadc);
 	if (err)
 		pr_err("failed to register touchscreen device\n");
 }
@@ -1500,6 +1498,7 @@ static struct regulator_init_data tps65217_regulator_data[] = {
 
 static struct tps65217_board beaglebone_tps65217_info = {
 	.tps65217_init_data = &tps65217_regulator_data[0],
+	.status_off = true,
 };
 
 static struct lis3lv02d_platform_data lis331dlh_pdata = {
@@ -1538,6 +1537,7 @@ static void lis331dlh_init(int evm_id, int profile)
 
 	switch (evm_id) {
 	case GEN_PURP_EVM:
+	case GEN_PURP_DDR3_EVM:
 		i2c_instance = 2;
 		break;
 	case EVM_SK:
@@ -1738,6 +1738,7 @@ static void d_can_init(int evm_id, int profile)
 		}
 		break;
 	case GEN_PURP_EVM:
+	case GEN_PURP_DDR3_EVM:
 		if (profile == PROFILE_1) {
 			setup_pin_mux(d_can_gp_pin_mux);
 			/* Instance One */
@@ -1959,13 +1960,106 @@ static void profibus_init(int evm_id, int profile)
 	return;
 }
 
+static struct omap_rtc_pdata am335x_rtc_info = {
+	.pm_off		= false,
+	.wakeup_capable	= 0,
+};
+
+static void am335x_rtc_init(int evm_id, int profile)
+{
+	void __iomem *base;
+	struct clk *clk;
+	struct omap_hwmod *oh;
+	struct platform_device *pdev;
+	char *dev_name = "am33xx-rtc";
+
+	clk = clk_get(NULL, "rtc_fck");
+	if (IS_ERR(clk)) {
+		pr_err("rtc : Failed to get RTC clock\n");
+		return;
+	}
+
+	if (clk_enable(clk)) {
+		pr_err("rtc: Clock Enable Failed\n");
+		return;
+	}
+
+	base = ioremap(AM33XX_RTC_BASE, SZ_4K);
+
+	if (WARN_ON(!base))
+		return;
+
+	/* Unlock the rtc's registers */
+	writel(0x83e70b13, base + 0x6c);
+	writel(0x95a4f1e0, base + 0x70);
+
+	/*
+	 * Enable the 32K OSc
+	 * TODO: Need a better way to handle this
+	 * Since we want the clock to be running before mmc init
+	 * we need to do it before the rtc probe happens
+	 */
+	writel(0x48, base + 0x54);
+
+	iounmap(base);
+
+	switch (evm_id) {
+	case BEAGLE_BONE_A3:
+	case BEAGLE_BONE_OLD:
+		am335x_rtc_info.pm_off = true;
+		break;
+	default:
+		break;
+	}
+
+	clk_disable(clk);
+	clk_put(clk);
+
+	if (omap_rev() == AM335X_REV_ES2_0)
+		am335x_rtc_info.wakeup_capable = 1;
+
+	oh = omap_hwmod_lookup("rtc");
+	if (!oh) {
+		pr_err("could not look up %s\n", "rtc");
+		return;
+	}
+
+	pdev = omap_device_build(dev_name, -1, oh, &am335x_rtc_info,
+			sizeof(struct omap_rtc_pdata), NULL, 0, 0);
+	WARN(IS_ERR(pdev), "Can't build omap_device for %s:%s.\n",
+			dev_name, oh->name);
+}
+
+/* Enable clkout2 */
+static struct pinmux_config clkout2_pin_mux[] = {
+	{"xdma_event_intr1.clkout2", OMAP_MUX_MODE3 | AM33XX_PIN_OUTPUT},
+	{NULL, 0},
+};
+
+static void clkout2_enable(int evm_id, int profile)
+{
+	struct clk *ck_32;
+
+	ck_32 = clk_get(NULL, "clkout2_ck");
+	if (IS_ERR(ck_32)) {
+		pr_err("Cannot clk_get ck_32\n");
+		return;
+	}
+
+	clk_enable(ck_32);
+
+	setup_pin_mux(clkout2_pin_mux);
+}
+
 /* General Purpose EVM */
 static struct evm_dev_cfg gen_purp_evm_dev_cfg[] = {
+	{am335x_rtc_init, DEV_ON_BASEBOARD, PROFILE_ALL},
+	{clkout2_enable, DEV_ON_BASEBOARD, PROFILE_ALL},
 	{enable_ecap0,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
 						PROFILE_2 | PROFILE_7) },
 	{lcdc_init,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
 						PROFILE_2 | PROFILE_7) },
-	{tsc_init,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
+	{mfd_tscadc_init,	DEV_ON_DGHTR_BRD, (PROFILE_0 | PROFILE_1 |
 						PROFILE_2 | PROFILE_7) },
 	{rgmii1_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{rgmii2_init,	DEV_ON_DGHTR_BRD, (PROFILE_1 | PROFILE_2 |
@@ -1996,6 +2090,8 @@ static struct evm_dev_cfg gen_purp_evm_dev_cfg[] = {
 
 /* Industrial Auto Motor Control EVM */
 static struct evm_dev_cfg ind_auto_mtrl_evm_dev_cfg[] = {
+	{am335x_rtc_init, DEV_ON_BASEBOARD, PROFILE_ALL},
+	{clkout2_enable, DEV_ON_BASEBOARD, PROFILE_ALL},
 	{mii1_init,	DEV_ON_DGHTR_BRD, PROFILE_ALL},
 	{usb0_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{usb1_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
@@ -2010,6 +2106,8 @@ static struct evm_dev_cfg ind_auto_mtrl_evm_dev_cfg[] = {
 
 /* Beaglebone < Rev A3 */
 static struct evm_dev_cfg beaglebone_old_dev_cfg[] = {
+	{am335x_rtc_init, DEV_ON_BASEBOARD, PROFILE_NONE},
+	{clkout2_enable, DEV_ON_BASEBOARD, PROFILE_NONE},
 	{rmii1_init,	DEV_ON_BASEBOARD, PROFILE_NONE},
 	{usb0_init,	DEV_ON_BASEBOARD, PROFILE_NONE},
 	{usb1_init,	DEV_ON_BASEBOARD, PROFILE_NONE},
@@ -2020,6 +2118,8 @@ static struct evm_dev_cfg beaglebone_old_dev_cfg[] = {
 
 /* Beaglebone Rev A3 and after */
 static struct evm_dev_cfg beaglebone_dev_cfg[] = {
+	{am335x_rtc_init, DEV_ON_BASEBOARD, PROFILE_NONE},
+	{clkout2_enable, DEV_ON_BASEBOARD, PROFILE_NONE},
 	{tps65217_init,	DEV_ON_BASEBOARD, PROFILE_NONE},
 	{mii1_init,	DEV_ON_BASEBOARD, PROFILE_NONE},
 	{usb0_init,	DEV_ON_BASEBOARD, PROFILE_NONE},
@@ -2031,13 +2131,14 @@ static struct evm_dev_cfg beaglebone_dev_cfg[] = {
 
 /* EVM - Starter Kit */
 static struct evm_dev_cfg evm_sk_dev_cfg[] = {
+	{am335x_rtc_init, DEV_ON_BASEBOARD, PROFILE_ALL},
 	{mmc1_wl12xx_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{mmc0_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{rgmii1_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{rgmii2_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{lcdc_init,     DEV_ON_BASEBOARD, PROFILE_ALL},
 	{enable_ecap2,     DEV_ON_BASEBOARD, PROFILE_ALL},
-	{tsc_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
+	{mfd_tscadc_init,	DEV_ON_BASEBOARD, PROFILE_ALL},
 	{gpio_keys_init,  DEV_ON_BASEBOARD, PROFILE_ALL},
 	{gpio_led_init,  DEV_ON_BASEBOARD, PROFILE_ALL},
 	{lis331dlh_init, DEV_ON_BASEBOARD, PROFILE_ALL},
@@ -2060,9 +2161,16 @@ static int am33xx_evm_tx_clk_dly_phy_fixup(struct phy_device *phydev)
 static void setup_general_purpose_evm(void)
 {
 	u32 prof_sel = am335x_get_profile_selection();
-	pr_info("The board is general purpose EVM in profile %d\n", prof_sel);
+	u32 boardid = GEN_PURP_EVM;
 
-	_configure_device(GEN_PURP_EVM, gen_purp_evm_dev_cfg, (1L << prof_sel));
+	if (!strncmp("1.5A", config.version, 4))
+		boardid = GEN_PURP_DDR3_EVM;
+
+	pr_info("The board is general purpose EVM %sin profile %d\n",
+			((boardid == GEN_PURP_DDR3_EVM) ? "with DDR3 " : ""),
+			prof_sel);
+
+	_configure_device(boardid, gen_purp_evm_dev_cfg, (1L << prof_sel));
 
 	am33xx_cpsw_init(AM33XX_CPSW_MODE_RGMII, NULL, NULL);
 	/* Atheros Tx Clk delay Phy fixup */
@@ -2406,90 +2514,6 @@ static void __init am335x_evm_i2c_init(void)
 				ARRAY_SIZE(am335x_i2c0_boardinfo));
 }
 
-static struct resource am335x_rtc_resources[] = {
-	{
-		.start		= AM33XX_RTC_BASE,
-		.end		= AM33XX_RTC_BASE + SZ_4K - 1,
-		.flags		= IORESOURCE_MEM,
-	},
-	{ /* timer irq */
-		.start		= AM33XX_IRQ_RTC_TIMER,
-		.end		= AM33XX_IRQ_RTC_TIMER,
-		.flags		= IORESOURCE_IRQ,
-	},
-	{ /* alarm irq */
-		.start		= AM33XX_IRQ_RTC_ALARM,
-		.end		= AM33XX_IRQ_RTC_ALARM,
-		.flags		= IORESOURCE_IRQ,
-	},
-};
-
-static struct platform_device am335x_rtc_device = {
-	.name           = "omap_rtc",
-	.id             = -1,
-	.num_resources	= ARRAY_SIZE(am335x_rtc_resources),
-	.resource	= am335x_rtc_resources,
-};
-
-static int am335x_rtc_init(void)
-{
-	void __iomem *base;
-	struct clk *clk;
-
-	clk = clk_get(NULL, "rtc_fck");
-	if (IS_ERR(clk)) {
-		pr_err("rtc : Failed to get RTC clock\n");
-		return -1;
-	}
-
-	if (clk_enable(clk)) {
-		pr_err("rtc: Clock Enable Failed\n");
-		return -1;
-	}
-
-	base = ioremap(AM33XX_RTC_BASE, SZ_4K);
-
-	if (WARN_ON(!base))
-		return -ENOMEM;
-
-	/* Unlock the rtc's registers */
-	writel(0x83e70b13, base + 0x6c);
-	writel(0x95a4f1e0, base + 0x70);
-
-	/*
-	 * Enable the 32K OSc
-	 * TODO: Need a better way to handle this
-	 * Since we want the clock to be running before mmc init
-	 * we need to do it before the rtc probe happens
-	 */
-	writel(0x48, base + 0x54);
-
-	iounmap(base);
-
-	return  platform_device_register(&am335x_rtc_device);
-}
-
-/* Enable clkout2 */
-static struct pinmux_config clkout2_pin_mux[] = {
-	{"xdma_event_intr1.clkout2", OMAP_MUX_MODE3 | AM33XX_PIN_OUTPUT},
-	{NULL, 0},
-};
-
-static void __init clkout2_enable(void)
-{
-	struct clk *ck_32;
-
-	ck_32 = clk_get(NULL, "clkout2_ck");
-	if (IS_ERR(ck_32)) {
-		pr_err("Cannot clk_get ck_32\n");
-		return;
-	}
-
-	clk_enable(ck_32);
-
-	setup_pin_mux(clkout2_pin_mux);
-}
-
 void __iomem *am33xx_emif_base;
 
 void __iomem * __init am33xx_get_mem_ctlr(void)
@@ -2557,8 +2581,6 @@ static void __init am335x_evm_init(void)
 	am33xx_cpuidle_init();
 	am33xx_mux_init(board_mux);
 	omap_serial_init();
-	am335x_rtc_init();
-	clkout2_enable();
 	am335x_evm_i2c_init();
 	omap_sdrc_init(NULL, NULL);
 	usb_musb_init(&musb_board_data);

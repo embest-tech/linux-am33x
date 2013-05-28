@@ -263,10 +263,11 @@ void am35x_set_mode(u8 musb_mode)
 	omap_ctrl_writel(devconf2, AM35XX_CONTROL_DEVCONF2);
 }
 
-void ti81xx_musb_phy_power(u8 id, u8 on)
+void ti81xx_musb_phy_power(u8 id, u8 on , bool wkup)
 {
 	void __iomem *scm_base = NULL;
 	u32 usbphycfg;
+	u32 usbwkupctrl = 0;
 
 	if (cpu_is_ti816x())
 		scm_base = ioremap(TI81XX_SCM_BASE, SZ_2K);
@@ -279,6 +280,7 @@ void ti81xx_musb_phy_power(u8 id, u8 on)
 	}
 
 	usbphycfg = __raw_readl(scm_base + (id ? USBCTRL1 : USBCTRL0));
+	usbwkupctrl = readl(scm_base + USBWKUPCTRL);
 
 	if (on) {
 		if (cpu_is_ti816x()) {
@@ -288,17 +290,25 @@ void ti81xx_musb_phy_power(u8 id, u8 on)
 		} else if (cpu_is_am33xx()) {
 			usbphycfg &= ~(USBPHY_CM_PWRDN | USBPHY_OTG_PWRDN);
 			usbphycfg |= (USBPHY_OTGVDET_EN | USBPHY_OTGSESSEND_EN);
+			usbwkupctrl = AM33XX_USB_WKUP_CTRL_DISABLE;
 		}
 	} else {
 		if (cpu_is_ti816x())
 			usbphycfg &= ~((id ? TI816X_USBPHY1_NORMAL_MODE :
 					TI816X_USBPHY0_NORMAL_MODE)
 					| TI816X_USBPHY_REFCLK_OSC);
-		else if (cpu_is_am33xx())
+		else if (cpu_is_am33xx()) {
 			usbphycfg |= USBPHY_CM_PWRDN | USBPHY_OTG_PWRDN;
-
+		if (wkup)
+			usbwkupctrl |= id ? AM33XX_USB1_WKUP_CTRL_ENABLE :
+							AM33XX_USB0_WKUP_CTRL_ENABLE;
+		else
+			usbwkupctrl &= id ? ~AM33XX_USB1_WKUP_CTRL_ENABLE :
+							~AM33XX_USB0_WKUP_CTRL_ENABLE;
+		}
 	}
 	__raw_writel(usbphycfg, scm_base + (id ? USBCTRL1 : USBCTRL0));
+	writel(usbwkupctrl , scm_base + USBWKUPCTRL);
 
 	iounmap(scm_base);
 }

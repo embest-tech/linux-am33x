@@ -239,10 +239,10 @@ static void cpsw_ale_flush_mcast(struct cpsw_ale *ale, u32 *ale_entry,
 	mask &= ~port_mask;
 
 	/* free if only remaining port is host port */
-	if (mask == BIT(ale->ale_ports))
-		cpsw_ale_set_entry_type(ale_entry, ALE_TYPE_FREE);
-	else
+	if (mask)
 		cpsw_ale_set_port_mask(ale_entry, mask);
+	else
+		cpsw_ale_set_entry_type(ale_entry, ALE_TYPE_FREE);
 }
 
 int cpsw_ale_flush_multicast(struct cpsw_ale *ale, int port_mask)
@@ -267,6 +267,31 @@ int cpsw_ale_flush_multicast(struct cpsw_ale *ale, int port_mask)
 		cpsw_ale_write(ale, idx, ale_entry);
 	}
 	return 0;
+}
+
+void cpsw_ale_flush_vlan_multicast(struct cpsw_ale *ale, u16 vid, int port_mask)
+{
+	u32 ale_entry[ALE_ENTRY_WORDS];
+	int ret, idx;
+
+	for (idx = 0; idx < ale->ale_entries; idx++) {
+		cpsw_ale_read(ale, idx, ale_entry);
+		ret = cpsw_ale_get_entry_type(ale_entry);
+		if (ret != ALE_TYPE_VLAN_ADDR)
+			continue;
+		if (cpsw_ale_get_vlan_id(ale_entry) != vid)
+			continue;
+
+		if (cpsw_ale_get_mcast(ale_entry)) {
+			u8 addr[6];
+
+			cpsw_ale_get_addr(ale_entry, addr);
+			if (!is_broadcast_ether_addr(addr)) {
+				cpsw_ale_flush_mcast(ale, ale_entry, port_mask);
+				cpsw_ale_write(ale, idx, ale_entry);
+			}
+		}
+	}
 }
 
 static void cpsw_ale_flush_ucast(struct cpsw_ale *ale, u32 *ale_entry,
@@ -691,6 +716,7 @@ static struct ale_control_info ale_controls[] = {
 	[ALE_ENABLE]		= CTRL_GLOBAL(enable, 31),
 	[ALE_CLEAR]		= CTRL_GLOBAL(clear, 30),
 	[ALE_AGEOUT]		= CTRL_GLOBAL(ageout, 29),
+	[ALE_P0_UNI_FLOOD]	= CTRL_GLOBAL(p0_uni_flood, 8),
 	[ALE_VLAN_NOLEARN]	= CTRL_GLOBAL(vlan_nolearn, 7),
 	[ALE_NO_PORT_VLAN]	= CTRL_GLOBAL(no_port_vlan, 6),
 	[ALE_OUI_DENY]		= CTRL_GLOBAL(oui_deny, 5),
@@ -704,6 +730,7 @@ static struct ale_control_info ale_controls[] = {
 	[ALE_PORT_DROP_UNTAGGED]     = CTRL_PORTCTL(drop_untagged, 2, 1),
 	[ALE_PORT_DROP_UNKNOWN_VLAN] = CTRL_PORTCTL(drop_unknown, 3, 1),
 	[ALE_PORT_NOLEARN]	     = CTRL_PORTCTL(nolearn, 4, 1),
+	[ALE_PORT_NO_SA_UPDATE]	     = CTRL_PORTCTL(nolearn, 5, 1),
 	[ALE_PORT_MCAST_LIMIT]	     = CTRL_PORTCTL(mcast_limit, 16, 8),
 	[ALE_PORT_BCAST_LIMIT]	     = CTRL_PORTCTL(bcast_limit, 24, 8),
 

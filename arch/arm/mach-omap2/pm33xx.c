@@ -116,16 +116,30 @@ static int am33xx_pm_suspend(void)
 {
 	int state, ret = 0;
 
-	struct omap_hwmod *gpmc_oh, *usb_oh;
+	struct omap_hwmod *gpmc_oh, *usb_oh, *gpio1_oh;
 
 	usb_oh		= omap_hwmod_lookup("usb_otg_hs");
 	gpmc_oh		= omap_hwmod_lookup("gpmc");
+	gpio1_oh	= omap_hwmod_lookup("gpio1");	/* WKUP domain GPIO */
 
 	omap_hwmod_enable(usb_oh);
 	omap_hwmod_enable(gpmc_oh);
 
 	omap_hwmod_idle(usb_oh);
 	omap_hwmod_idle(gpmc_oh);
+
+	/*
+	 * Disable the GPIO module. This ensure that
+	 * only sWAKEUP interrupts to Cortex-M3 get generated
+	 *
+	 * XXX: EVM_SK uses a GPIO0 pin for VTP control
+	 * in suspend and hence we can't do this for EVM_SK
+	 * alone. The side-effect of this is that GPIO wakeup
+	 * might have issues. Refer to commit 672639b for the
+	 * details
+	 */
+	if (suspend_cfg_param_list[EVM_ID] != EVM_SK)
+		omap_hwmod_idle(gpio1_oh);
 
 	if (gfx_l3_clkdm && gfx_l4ls_clkdm) {
 		clkdm_sleep(gfx_l3_clkdm);
@@ -137,6 +151,8 @@ static int am33xx_pm_suspend(void)
 		pwrdm_set_next_pwrst(gfx_pwrdm, PWRDM_POWER_OFF);
 	else
 		pr_err("Could not program GFX to low power state\n");
+
+	omap3_intc_suspend();
 
 	writel(0x0, AM33XX_CM_MPU_MPU_CLKCTRL);
 
@@ -159,6 +175,13 @@ static int am33xx_pm_suspend(void)
 	}
 
 	ret = am33xx_verify_lp_state(ret);
+
+	/*
+	 * Enable the GPIO module. Once the driver is
+	 * fully adapted to runtime PM this will go away
+	 */
+	if (suspend_cfg_param_list[EVM_ID] != EVM_SK)
+		omap_hwmod_enable(gpio1_oh);
 
 	return ret;
 }
@@ -524,6 +547,13 @@ static int __init am33xx_pm_init(void)
 		suspend_cfg_param_list[EVM_ID] = evm_id;
 	else
 		suspend_cfg_param_list[EVM_ID] = 0xff;
+
+	/* CPU Revision */
+	reg = omap_rev();
+	if (reg == AM335X_REV_ES2_0)
+		suspend_cfg_param_list[CPU_REV] = CPU_REV_2;
+	else
+		suspend_cfg_param_list[CPU_REV] = CPU_REV_1;
 
 	(void) clkdm_for_each(clkdms_setup, NULL);
 

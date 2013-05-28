@@ -1427,6 +1427,8 @@ enum { MUSB_CONTROLLER_MHDRC, MUSB_CONTROLLER_HDRC, };
  */
 static int __devinit musb_core_init(u16 musb_type, struct musb *musb)
 {
+	struct device *dev = musb->controller;
+	struct musb_hdrc_platform_data *plat = dev->platform_data;
 	u8 reg;
 	char *type;
 	char aInfo[90], aRevision[32], aDate[12];
@@ -1554,9 +1556,26 @@ static int __devinit musb_core_init(u16 musb_type, struct musb *musb)
 			dev_dbg(musb->controller, "hw_ep %d not configured\n", i);
 	}
 
+	if (!plat->config->mult_bulk_tx) {
+		musb->bulk_split = 0;
+		printk(KERN_DEBUG "%s.%d: bulk split disabled\n",
+			musb_driver_name, musb->id);
+	}
+	if (!plat->config->mult_bulk_rx) {
+		musb->bulk_combine = 0;
+		printk(KERN_DEBUG "%s.%d: bulk combine disabled\n",
+			musb_driver_name, musb->id);
+	}
+
 	return 0;
 }
 
+void musb_reinit(u16 musb_type, struct musb *musb)
+{
+	musb_core_init(musb_type ? MUSB_CONTROLLER_MHDRC
+			: MUSB_CONTROLLER_HDRC, musb);
+}
+EXPORT_SYMBOL(musb_reinit);
 /*-------------------------------------------------------------------------*/
 
 #if defined(CONFIG_SOC_OMAP2430) || defined(CONFIG_SOC_OMAP3430) || \
@@ -2059,12 +2078,12 @@ musb_init_controller(struct device *dev, int nIrq, void __iomem *ctrl)
 	}
 	musb->nIrq = nIrq;
 /* FIXME this handles wakeup irqs wrong */
-	if (enable_irq_wake(nIrq) == 0) {
+	if (enable_irq_wake(nIrq) == 0)
 		musb->irq_wake = 1;
-		device_init_wakeup(dev, 1);
-	} else {
+	else
 		musb->irq_wake = 0;
-	}
+
+	device_init_wakeup(dev, 1);
 
 	/* host side needs more setup */
 	if (is_host_enabled(musb)) {
@@ -2097,7 +2116,7 @@ musb_init_controller(struct device *dev, int nIrq, void __iomem *ctrl)
 		musb->xceiv->state = OTG_STATE_A_IDLE;
 
 		status = usb_add_hcd(musb_to_hcd(musb), -1, 0);
-
+		device_set_wakeup_enable(dev, 0);
 		hcd->self.uses_pio_for_control = 1;
 		dev_dbg(musb->controller, "%s mode, status %d, devctl %02x %c\n",
 			"HOST", status,
@@ -2112,6 +2131,7 @@ musb_init_controller(struct device *dev, int nIrq, void __iomem *ctrl)
 		musb->xceiv->state = OTG_STATE_B_IDLE;
 
 		status = musb_gadget_setup(musb);
+		device_set_wakeup_enable(dev, 0);
 
 		dev_dbg(musb->controller, "%s mode, status %d, dev%02x\n",
 			is_otg_enabled(musb) ? "OTG" : "PERIPHERAL",

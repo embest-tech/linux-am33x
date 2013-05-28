@@ -40,6 +40,7 @@ enum cpsw_ale_control {
 	ALE_ENABLE,
 	ALE_CLEAR,
 	ALE_AGEOUT,
+	ALE_P0_UNI_FLOOD,
 	ALE_VLAN_NOLEARN,
 	ALE_NO_PORT_VLAN,
 	ALE_OUI_DENY,
@@ -53,6 +54,7 @@ enum cpsw_ale_control {
 	ALE_PORT_DROP_UNTAGGED,
 	ALE_PORT_DROP_UNKNOWN_VLAN,
 	ALE_PORT_NOLEARN,
+	ALE_PORT_NO_SA_UPDATE,
 	ALE_PORT_UNKNOWN_VLAN_MEMBER,
 	ALE_PORT_UNKNOWN_MCAST_FLOOD,
 	ALE_PORT_UNKNOWN_REG_MCAST_FLOOD,
@@ -102,6 +104,8 @@ int cpsw_ale_control_get(struct cpsw_ale *ale, int port, int control);
 int cpsw_ale_control_set(struct cpsw_ale *ale, int port,
 			 int control, int value);
 int cpsw_ale_flush_multicast(struct cpsw_ale *ale, int port_mask);
+void cpsw_ale_flush_vlan_multicast(struct cpsw_ale *ale, u16 vid,
+				   int port_mask);
 int cpsw_ale_dump(struct cpsw_ale *ale, int index, char *buf, int len);
 int cpsw_ale_match_addr(struct cpsw_ale *ale, u8* addr, u16 vid);
 int cpsw_ale_match_vlan(struct cpsw_ale *ale, u16 vid);

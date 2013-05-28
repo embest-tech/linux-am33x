@@ -77,7 +77,7 @@ static int ecap_pwm_stop(struct pwm_device *p)
 
 	spin_lock_irqsave(&ep->lock, flags);
 	v = readw(ep->mmio_base + CAPTURE_CTRL2_REG);
-	v &= ~ECTRL2_CTRSTP_FREERUN;
+	v &= ~(ECTRL2_CTRSTP_FREERUN | ECTRL2_MDSL_ECAP);
 	writew(v, ep->mmio_base + CAPTURE_CTRL2_REG);
 	spin_unlock_irqrestore(&ep->lock, flags);
 
@@ -103,7 +103,7 @@ static int ecap_pwm_start(struct pwm_device *p)
 
 	spin_lock_irqsave(&ep->lock, flags);
 	v = readw(ep->mmio_base + CAPTURE_CTRL2_REG);
-	v |= ECTRL2_CTRSTP_FREERUN;
+	v |= (ECTRL2_CTRSTP_FREERUN | ECTRL2_MDSL_ECAP);
 	writew(v, ep->mmio_base + CAPTURE_CTRL2_REG);
 	spin_unlock_irqrestore(&ep->lock, flags);
 	set_bit(FLAG_RUNNING, &p->flags);
@@ -131,16 +131,13 @@ static int ecap_pwm_set_polarity(struct pwm_device *p, char pol)
 
 static int ecap_pwm_config_period(struct pwm_device *p)
 {
-	unsigned long flags, v;
+	unsigned long flags;
 	struct ecap_pwm *ep = to_ecap_pwm(p);
 
 	 pm_runtime_get_sync(ep->dev);
 
 	spin_lock_irqsave(&ep->lock, flags);
 	writel((p->period_ticks) - 1, ep->mmio_base + CAPTURE_3_REG);
-	v = readw(ep->mmio_base + CAPTURE_CTRL2_REG);
-	v |= (ECTRL2_MDSL_ECAP | ECTRL2_SYNCOSEL_MASK);
-	writew(v, ep->mmio_base + CAPTURE_CTRL2_REG);
 	spin_unlock_irqrestore(&ep->lock, flags);
 
 	pm_runtime_put_sync(ep->dev);
@@ -166,6 +163,12 @@ static int ecap_pwm_config_duty(struct pwm_device *p)
 		writel(0, ep->mmio_base + TIMER_CTR_REG);
 	}
 	spin_unlock_irqrestore(&ep->lock, flags);
+
+	if (!pwm_is_running(p)) {
+		v = readw(ep->mmio_base + CAPTURE_CTRL2_REG);
+		v &= ~ECTRL2_MDSL_ECAP;
+		writew(v, ep->mmio_base + CAPTURE_CTRL2_REG);
+	}
 
 	pm_runtime_put_sync(ep->dev);
 	return 0;
@@ -414,9 +417,11 @@ static int __devexit ecap_remove(struct platform_device *pdev)
 
 	if (ep->version == PWM_VERSION_1) {
 		pdata = (&pdev->dev)->platform_data;
+		pm_runtime_get_sync(ep->dev);
 		val = readw(ep->config_mem_base + PWMSS_CLKCONFIG);
 		val &= ~BIT(ECAP_CLK_EN);
 		writew(val, ep->config_mem_base + PWMSS_CLKCONFIG);
+		pm_runtime_put_sync(ep->dev);
 		iounmap(ep->config_mem_base);
 		ep->config_mem_base = NULL;
 	}

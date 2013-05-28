@@ -213,11 +213,13 @@ enum tps65217_regulator_id {
 /**
  * struct tps65217_board - packages regulator init data
  * @tps65217_regulator_data: regulator initialization values
+ * @status_off: Set the PMIC to shutdown on PWR_EN toggle
  *
  * Board data may be used to initialize regulator.
  */
 struct tps65217_board {
 	struct regulator_init_data *tps65217_init_data;
+	bool status_off;
 };
 
 struct tps65217_rdelay {
