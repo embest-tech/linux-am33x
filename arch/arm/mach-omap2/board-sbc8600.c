@@ -78,6 +78,7 @@
 #define AR8051_PHY_DEBUG_DATA_REG	0x1e
 #define AR8051_DEBUG_RGMII_CLK_DLY_REG	0x5
 #define AR8051_RGMII_TX_CLK_DLY		BIT(8)
+#define MAX_NUMBER                      20
 
 static const struct display_panel disp_panel = {
 	WVGA,
@@ -133,15 +134,19 @@ struct da8xx_lcdc_platform_data am335x_lcd_pdata[] = {
         }, {
                 .manu_name              = "InnoLux",
                 .controller_data        = &lcd_cfg,
-                .type                   = "LVDS",
+                .type                   = "LVDS_800x600",
+        }, {
+                .manu_name              = "InnoLux",
+                .controller_data        = &lcd_cfg,
+                .type                   = "LVDS_1024x768",
         },
 };
 
-static char lcd_type[11];
+static char lcd_type[MAX_NUMBER];
 
 static int __init lcd_type_init(char* s) {
 
-        strncpy(lcd_type, s, 11);
+        strncpy(lcd_type, s, MAX_NUMBER);
         return 0;
 }
 
