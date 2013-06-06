@@ -360,6 +360,47 @@ static struct pinmux_config lcdc_pin_mux[] = {
 	{NULL, 0},
 };
 
+/* Module pin mux for LCDC */
+static struct pinmux_config lcdc_lvds_pin_mux[] = {
+	{"lcd_data0.lcd_data0",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data1.lcd_data1",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data2.lcd_data2",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data3.lcd_data3",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data4.lcd_data4",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data5.lcd_data5",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data6.lcd_data6",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data7.lcd_data7",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data8.lcd_data8",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data9.lcd_data9",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data10.lcd_data10",	OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data11.lcd_data11",	OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data12.lcd_data12",	OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data13.lcd_data13",	OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data14.lcd_data14",	OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+	{"lcd_data15.lcd_data15",	OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT
+						       | AM33XX_PULL_DISA},
+        {"lcd_vsync.gpio2_22",          OMAP_MUX_MODE7 | AM33XX_PIN_OUTPUT},
+        {"lcd_hsync.gpio2_23",          OMAP_MUX_MODE7 | AM33XX_PIN_INPUT_PULLUP},
+	{"lcd_pclk.lcd_pclk",		OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT},
+	{"lcd_ac_bias_en.lcd_ac_bias_en", OMAP_MUX_MODE0 | AM33XX_PIN_OUTPUT},
+	{NULL, 0},
+};
+
 static struct pinmux_config tsc_pin_mux[] = {
 	{"ain0.ain0",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
 	{"ain1.ain1",           OMAP_MUX_MODE0 | AM33XX_INPUT_EN},
@@ -846,8 +887,6 @@ static void lcdc_init(int evm_id, int profile)
         struct da8xx_lcdc_platform_data *lcdc_pdata = NULL;
         int i;
 
-        setup_pin_mux(lcdc_pin_mux);
-
         if (conf_disp_pll(300000000)) {
                 pr_info("Failed configure display PLL, not attempting to"
                                 "register LCDC\n");
@@ -858,7 +897,13 @@ static void lcdc_init(int evm_id, int profile)
                 if(!strcmp(lcd_type, am335x_lcd_pdata[i].type))
                         lcdc_pdata = &am335x_lcd_pdata[i];
         }
-
+	
+	if (!strcmp(lcd_type, am335x_lcd_pdata[4].type)) {
+		setup_pin_mux(lcdc_lvds_pin_mux);
+	} else {
+		setup_pin_mux(lcdc_pin_mux);
+	}
+		
         if(!lcdc_pdata) {
                 pr_err("invalid type of lcd, set to default!\n");
                 lcdc_pdata = &am335x_lcd_pdata[0];
@@ -1599,7 +1644,7 @@ static void __init devkit8600_i2c_init(void)
 /*	evm_init_cpld();*/
 
 	setup_pin_mux(i2c0_pin_mux);
-	omap_register_i2c_bus(1, 100, am335x_i2c0_boardinfo,
+	omap_register_i2c_bus(1, 400, am335x_i2c0_boardinfo,
 				ARRAY_SIZE(am335x_i2c0_boardinfo));
 }
 
