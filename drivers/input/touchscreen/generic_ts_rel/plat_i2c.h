@@ -16,9 +16,9 @@
 #define PLATFORM_I2C_BUS			1	// I2C Bus
 #define PLATFORM_I2C_ADDR			0x01
 #if defined (CONFIG_MACH_SBC8600)
-#define PLATFORM_I2C_SPEED                      300000
+#define PLATFORM_I2C_SPEED			300000
 #else
-#define PLATFORM_I2C_SPEED                      400000
+#define PLATFORM_I2C_SPEED			400000
 #endif
 
 
@@ -52,7 +52,7 @@
 #define PLATFORM_AW_IRQ_PIN_STR		"ctp_int_port"
 
 // CONFIG_ARCH_SUN4I
-#define PLATFORM_AW_CTP_IRQ_NUM			(21)	// EINT_21
+//#define PLATFORM_AW_CTP_IRQ_NUM			(21)	// EINT_21
 // CONFIG_ARCH_SUN5I
 #define PLATFORM_AW_CTP_IRQ_NUM			(9)	// EINT_9
 
