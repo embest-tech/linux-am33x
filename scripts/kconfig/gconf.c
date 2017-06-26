@@ -10,6 +10,7 @@
 #  include <config.h>
 #endif
 
+#include <stdlib.h>
 #include "lkc.h"
 #include "images.c"
 
@@ -22,7 +23,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
-#include <stdlib.h>
 
 //#define DEBUG
 
@@ -169,14 +169,6 @@ void init_main_window(const gchar * glade_file)
 	style = gtk_widget_get_style(main_wnd);
 	widget = glade_xml_get_widget(xml, "toolbar1");
 
-#if 0	/* Use stock Gtk icons instead */
-	replace_button_icon(xml, main_wnd->window, style,
-			    "button1", (gchar **) xpm_back);
-	replace_button_icon(xml, main_wnd->window, style,
-			    "button2", (gchar **) xpm_load);
-	replace_button_icon(xml, main_wnd->window, style,
-			    "button3", (gchar **) xpm_save);
-#endif
 	replace_button_icon(xml, main_wnd->window, style,
 			    "button4", (gchar **) xpm_single_view);
 	replace_button_icon(xml, main_wnd->window, style,
@@ -184,22 +176,6 @@ void init_main_window(const gchar * glade_file)
 	replace_button_icon(xml, main_wnd->window, style,
 			    "button6", (gchar **) xpm_tree_view);
 
-#if 0
-	switch (view_mode) {
-	case SINGLE_VIEW:
-		widget = glade_xml_get_widget(xml, "button4");
-		g_signal_emit_by_name(widget, "clicked");
-		break;
-	case SPLIT_VIEW:
-		widget = glade_xml_get_widget(xml, "button5");
-		g_signal_emit_by_name(widget, "clicked");
-		break;
-	case FULL_VIEW:
-		widget = glade_xml_get_widget(xml, "button6");
-		g_signal_emit_by_name(widget, "clicked");
-		break;
-	}
-#endif
 	txtbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(text_w));
 	tag1 = gtk_text_buffer_create_tag(txtbuf, "mytag1",
 					  "foreground", "red",
@@ -683,7 +659,7 @@ void on_introduction1_activate(GtkMenuItem * menuitem, gpointer user_data)
 	dialog = gtk_message_dialog_new(GTK_WINDOW(main_wnd),
 					GTK_DIALOG_DESTROY_WITH_PARENT,
 					GTK_MESSAGE_INFO,
-					GTK_BUTTONS_CLOSE, intro_text);
+					GTK_BUTTONS_CLOSE, "%s", intro_text);
 	g_signal_connect_swapped(GTK_OBJECT(dialog), "response",
 				 G_CALLBACK(gtk_widget_destroy),
 				 GTK_OBJECT(dialog));
@@ -701,7 +677,7 @@ void on_about1_activate(GtkMenuItem * menuitem, gpointer user_data)
 	dialog = gtk_message_dialog_new(GTK_WINDOW(main_wnd),
 					GTK_DIALOG_DESTROY_WITH_PARENT,
 					GTK_MESSAGE_INFO,
-					GTK_BUTTONS_CLOSE, about_text);
+					GTK_BUTTONS_CLOSE, "%s", about_text);
 	g_signal_connect_swapped(GTK_OBJECT(dialog), "response",
 				 G_CALLBACK(gtk_widget_destroy),
 				 GTK_OBJECT(dialog));
@@ -720,7 +696,7 @@ void on_license1_activate(GtkMenuItem * menuitem, gpointer user_data)
 	dialog = gtk_message_dialog_new(GTK_WINDOW(main_wnd),
 					GTK_DIALOG_DESTROY_WITH_PARENT,
 					GTK_MESSAGE_INFO,
-					GTK_BUTTONS_CLOSE, license_text);
+					GTK_BUTTONS_CLOSE, "%s", license_text);
 	g_signal_connect_swapped(GTK_OBJECT(dialog), "response",
 				 G_CALLBACK(gtk_widget_destroy),
 				 GTK_OBJECT(dialog));
@@ -830,7 +806,7 @@ static void renderer_edited(GtkCellRendererText * cell,
 static void change_sym_value(struct menu *menu, gint col)
 {
 	struct symbol *sym = menu->sym;
-	tristate oldval, newval;
+	tristate newval;
 
 	if (!sym)
 		return;
@@ -847,7 +823,6 @@ static void change_sym_value(struct menu *menu, gint col)
 	switch (sym_get_type(sym)) {
 	case S_BOOLEAN:
 	case S_TRISTATE:
-		oldval = sym_get_tristate_value(sym);
 		if (!sym_tristate_within_range(sym, newval))
 			newval = yes;
 		sym_set_tristate_value(sym, newval);
@@ -1278,7 +1253,6 @@ static void update_tree(struct menu *src, GtkTreeIter * dst)
 	gboolean valid;
 	GtkTreeIter *sibling;
 	struct symbol *sym;
-	struct property *prop;
 	struct menu *menu1, *menu2;
 
 	if (src == &rootmenu)
@@ -1287,7 +1261,6 @@ static void update_tree(struct menu *src, GtkTreeIter * dst)
 	valid = gtk_tree_model_iter_children(model2, child2, dst);
 	for (child1 = src->list; child1; child1 = child1->next) {
 
-		prop = child1->prompt;
 		sym = child1->sym;
 
 	      reparse:
@@ -1407,7 +1380,7 @@ static void display_tree(struct menu *menu)
 		    && (tree == tree2))
 			continue;
 /*
-                if (((menu != &rootmenu) && !(menu->flags & MENU_ROOT))
+		if (((menu != &rootmenu) && !(menu->flags & MENU_ROOT))
 		    || (view_mode == FULL_VIEW)
 		    || (view_mode == SPLIT_VIEW))*/
 
@@ -1501,9 +1474,12 @@ int main(int ac, char *av[])
 		case 'a':
 			//showAll = 1;
 			break;
+		case 's':
+			conf_set_message_callback(NULL);
+			break;
 		case 'h':
 		case '?':
-			printf("%s <config>\n", av[0]);
+			printf("%s [-s] <config>\n", av[0]);
 			exit(0);
 		}
 		name = av[2];

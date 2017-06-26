@@ -23,6 +23,7 @@
 #include <crypto/internal/hash.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/string.h>
 #include <linux/types.h>
 #include <asm/byteorder.h>
@@ -254,4 +255,4 @@ module_exit(md4_mod_fini);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("MD4 Message Digest Algorithm");
-
+MODULE_ALIAS_CRYPTO("md4");

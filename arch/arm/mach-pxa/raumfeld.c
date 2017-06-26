@@ -43,14 +43,16 @@
 #include <linux/regulator/consumer.h>
 #include <linux/delay.h>
 
+#include <asm/system_info.h>
+
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
 #include <mach/pxa300.h>
-#include <mach/ohci.h>
-#include <mach/pxafb.h>
-#include <mach/mmc.h>
-#include <plat/pxa3xx_nand.h>
+#include <linux/platform_data/usb-ohci-pxa27x.h>
+#include <linux/platform_data/video-pxafb.h>
+#include <linux/platform_data/mmc-pxamci.h>
+#include <linux/platform_data/mtd-nand-pxa3xx.h>
 
 #include "generic.h"
 #include "devices.h"
@@ -292,8 +294,8 @@ static struct resource smc91x_resources[] = {
 		.flags	= IORESOURCE_MEM,
 	},
 	{
-		.start	= gpio_to_irq(GPIO_ETH_IRQ),
-		.end	= gpio_to_irq(GPIO_ETH_IRQ),
+		.start	= PXA_GPIO_TO_IRQ(GPIO_ETH_IRQ),
+		.end	= PXA_GPIO_TO_IRQ(GPIO_ETH_IRQ),
 		.flags	= IORESOURCE_IRQ | IRQF_TRIGGER_FALLING,
 	}
 };
@@ -346,8 +348,9 @@ static struct mtd_partition raumfeld_nand_partitions[] = {
 static struct pxa3xx_nand_platform_data raumfeld_nand_info = {
 	.enable_arbiter	= 1,
 	.keep_config	= 1,
-	.parts		= raumfeld_nand_partitions,
-	.nr_parts	= ARRAY_SIZE(raumfeld_nand_partitions),
+	.num_cs		= 1,
+	.parts[0]	= raumfeld_nand_partitions,
+	.nr_parts[0]	= ARRAY_SIZE(raumfeld_nand_partitions),
 };
 
 /**
@@ -502,6 +505,7 @@ static struct w1_gpio_platform_data w1_gpio_platform_data = {
 	.pin			= GPIO_ONE_WIRE,
 	.is_open_drain		= 0,
 	.enable_external_pullup	= w1_enable_external_pullup,
+	.ext_pullup_enable_pin	= -EINVAL,
 };
 
 struct platform_device raumfeld_w1_gpio_device = {
@@ -517,7 +521,7 @@ static void __init raumfeld_w1_init(void)
 				"W1 external pullup enable");
 
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_W1_PULLUP_ENABLE\n");
+		pr_warn("Unable to request GPIO_W1_PULLUP_ENABLE\n");
 	else
 		gpio_direction_output(GPIO_W1_PULLUP_ENABLE, 0);
 
@@ -535,6 +539,7 @@ static struct platform_pwm_backlight_data raumfeld_pwm_backlight_data = {
 	.dft_brightness	= 100,
 	/* 10000 ns = 10 ms ^= 100 kHz */
 	.pwm_period_ns	= 10000,
+	.enable_gpio	= -1,
 };
 
 static struct platform_device raumfeld_pwm_backlight_device = {
@@ -595,7 +600,7 @@ static void __init raumfeld_lcd_init(void)
 
 	ret = gpio_request(GPIO_TFT_VA_EN, "display VA enable");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_TFT_VA_EN\n");
+		pr_warn("Unable to request GPIO_TFT_VA_EN\n");
 	else
 		gpio_direction_output(GPIO_TFT_VA_EN, 1);
 
@@ -603,7 +608,7 @@ static void __init raumfeld_lcd_init(void)
 
 	ret = gpio_request(GPIO_DISPLAY_ENABLE, "display enable");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_DISPLAY_ENABLE\n");
+		pr_warn("Unable to request GPIO_DISPLAY_ENABLE\n");
 	else
 		gpio_direction_output(GPIO_DISPLAY_ENABLE, 1);
 
@@ -671,7 +676,7 @@ static struct lis3lv02d_platform_data lis3_pdata = {
 	.chip_select	= 1,			\
 	.controller_data = (void *) GPIO_ACCEL_CS,	\
 	.platform_data	= &lis3_pdata,		\
-	.irq		= gpio_to_irq(GPIO_ACCEL_IRQ),	\
+	.irq		= PXA_GPIO_TO_IRQ(GPIO_ACCEL_IRQ),	\
 }
 
 #define SPI_DAC7512	\
@@ -753,8 +758,10 @@ static void raumfeld_power_signal_charged(void)
 	struct power_supply *psy =
 		power_supply_get_by_name(raumfeld_power_supplicants[0]);
 
-	if (psy)
+	if (psy) {
 		power_supply_set_battery_charged(psy);
+		power_supply_put(psy);
+	}
 }
 
 static int raumfeld_power_resume(void)
@@ -809,17 +816,17 @@ static void __init raumfeld_power_init(void)
 	/* Set PEN2 high to enable maximum charge current */
 	ret = gpio_request(GPIO_CHRG_PEN2, "CHRG_PEN2");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_CHRG_PEN2\n");
+		pr_warn("Unable to request GPIO_CHRG_PEN2\n");
 	else
 		gpio_direction_output(GPIO_CHRG_PEN2, 1);
 
 	ret = gpio_request(GPIO_CHARGE_DC_OK, "CABLE_DC_OK");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_CHARGE_DC_OK\n");
+		pr_warn("Unable to request GPIO_CHARGE_DC_OK\n");
 
 	ret = gpio_request(GPIO_CHARGE_USB_SUSP, "CHARGE_USB_SUSP");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_CHARGE_USB_SUSP\n");
+		pr_warn("Unable to request GPIO_CHARGE_USB_SUSP\n");
 	else
 		gpio_direction_output(GPIO_CHARGE_USB_SUSP, 0);
 
@@ -950,12 +957,12 @@ static struct i2c_board_info raumfeld_connector_i2c_board_info __initdata = {
 
 static struct eeti_ts_platform_data eeti_ts_pdata = {
 	.irq_active_high = 1,
+	.irq_gpio = GPIO_TOUCH_IRQ,
 };
 
 static struct i2c_board_info raumfeld_controller_i2c_board_info __initdata = {
 	.type	= "eeti_ts",
 	.addr	= 0x0a,
-	.irq	= gpio_to_irq(GPIO_TOUCH_IRQ),
 	.platform_data = &eeti_ts_pdata,
 };
 
@@ -971,19 +978,19 @@ static void __init raumfeld_audio_init(void)
 
 	ret = gpio_request(GPIO_CODEC_RESET, "cs4270 reset");
 	if (ret < 0)
-		pr_warning("unable to request GPIO_CODEC_RESET\n");
+		pr_warn("unable to request GPIO_CODEC_RESET\n");
 	else
 		gpio_direction_output(GPIO_CODEC_RESET, 1);
 
 	ret = gpio_request(GPIO_SPDIF_RESET, "ak4104 s/pdif reset");
 	if (ret < 0)
-		pr_warning("unable to request GPIO_SPDIF_RESET\n");
+		pr_warn("unable to request GPIO_SPDIF_RESET\n");
 	else
 		gpio_direction_output(GPIO_SPDIF_RESET, 1);
 
 	ret = gpio_request(GPIO_MCLK_RESET, "MCLK reset");
 	if (ret < 0)
-		pr_warning("unable to request GPIO_MCLK_RESET\n");
+		pr_warn("unable to request GPIO_MCLK_RESET\n");
 	else
 		gpio_direction_output(GPIO_MCLK_RESET, 1);
 
@@ -1014,20 +1021,20 @@ static void __init raumfeld_common_init(void)
 
 	ret = gpio_request(GPIO_W2W_RESET, "Wi2Wi reset");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_W2W_RESET\n");
+		pr_warn("Unable to request GPIO_W2W_RESET\n");
 	else
 		gpio_direction_output(GPIO_W2W_RESET, 0);
 
 	ret = gpio_request(GPIO_W2W_PDN, "Wi2Wi powerup");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_W2W_PDN\n");
+		pr_warn("Unable to request GPIO_W2W_PDN\n");
 	else
 		gpio_direction_output(GPIO_W2W_PDN, 0);
 
 	/* this can be used to switch off the device */
 	ret = gpio_request(GPIO_SHUTDOWN_SUPPLY, "supply shutdown");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_SHUTDOWN_SUPPLY\n");
+		pr_warn("Unable to request GPIO_SHUTDOWN_SUPPLY\n");
 	else
 		gpio_direction_output(GPIO_SHUTDOWN_SUPPLY, 0);
 
@@ -1046,7 +1053,7 @@ static void __init raumfeld_controller_init(void)
 
 	ret = gpio_request(GPIO_SHUTDOWN_BATT, "battery shutdown");
 	if (ret < 0)
-		pr_warning("Unable to request GPIO_SHUTDOWN_BATT\n");
+		pr_warn("Unable to request GPIO_SHUTDOWN_BATT\n");
 	else
 		gpio_direction_output(GPIO_SHUTDOWN_BATT, 0);
 
@@ -1086,33 +1093,39 @@ static void __init raumfeld_speaker_init(void)
 
 #ifdef CONFIG_MACH_RAUMFELD_RC
 MACHINE_START(RAUMFELD_RC, "Raumfeld Controller")
-	.boot_params	= RAUMFELD_SDRAM_BASE + 0x100,
+	.atag_offset	= 0x100,
 	.init_machine	= raumfeld_controller_init,
 	.map_io		= pxa3xx_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa3xx_init_irq,
 	.handle_irq	= pxa3xx_handle_irq,
-	.timer		= &pxa_timer,
+	.init_time	= pxa_timer_init,
+	.restart	= pxa_restart,
 MACHINE_END
 #endif
 
 #ifdef CONFIG_MACH_RAUMFELD_CONNECTOR
 MACHINE_START(RAUMFELD_CONNECTOR, "Raumfeld Connector")
-	.boot_params	= RAUMFELD_SDRAM_BASE + 0x100,
+	.atag_offset	= 0x100,
 	.init_machine	= raumfeld_connector_init,
 	.map_io		= pxa3xx_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa3xx_init_irq,
 	.handle_irq	= pxa3xx_handle_irq,
-	.timer		= &pxa_timer,
+	.init_time	= pxa_timer_init,
+	.restart	= pxa_restart,
 MACHINE_END
 #endif
 
 #ifdef CONFIG_MACH_RAUMFELD_SPEAKER
 MACHINE_START(RAUMFELD_SPEAKER, "Raumfeld Speaker")
-	.boot_params	= RAUMFELD_SDRAM_BASE + 0x100,
+	.atag_offset	= 0x100,
 	.init_machine	= raumfeld_speaker_init,
 	.map_io		= pxa3xx_map_io,
+	.nr_irqs	= PXA_NR_IRQS,
 	.init_irq	= pxa3xx_init_irq,
 	.handle_irq	= pxa3xx_handle_irq,
-	.timer		= &pxa_timer,
+	.init_time	= pxa_timer_init,
+	.restart	= pxa_restart,
 MACHINE_END
 #endif

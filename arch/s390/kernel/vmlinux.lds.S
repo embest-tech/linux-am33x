@@ -6,17 +6,10 @@
 #include <asm/page.h>
 #include <asm-generic/vmlinux.lds.h>
 
-#ifndef CONFIG_64BIT
-OUTPUT_FORMAT("elf32-s390", "elf32-s390", "elf32-s390")
-OUTPUT_ARCH(s390)
-ENTRY(_start)
-jiffies = jiffies_64 + 4;
-#else
 OUTPUT_FORMAT("elf64-s390", "elf64-s390", "elf64-s390")
 OUTPUT_ARCH(s390:64-bit)
-ENTRY(_start)
+ENTRY(startup)
 jiffies = jiffies_64;
-#endif
 
 PHDRS {
 	text PT_LOAD FLAGS(5);	/* R_E */
@@ -43,7 +36,9 @@ SECTIONS
 
 	NOTES :text :note
 
-	RODATA
+	.dummy : { *(.dummy) } :data
+
+	RO_DATA_SECTION(PAGE_SIZE)
 
 #ifdef CONFIG_SHARED_KERNEL
 	. = ALIGN(0x100000);	/* VM shared segments are 1MB aligned */
@@ -71,6 +66,10 @@ SECTIONS
 	*/
 	.exit.text : {
 		EXIT_TEXT
+	}
+
+	.exit.data : {
+		EXIT_DATA
 	}
 
 	/* early.c uses stsi, which requires page aligned data. */

@@ -32,10 +32,10 @@
 #include <linux/completion.h>
 #include <linux/miscdevice.h>
 #include <linux/delay.h>
-#include <linux/sysdev.h>
 #include <linux/poll.h>
 #include <linux/mutex.h>
 #include <linux/of_device.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
 
@@ -46,7 +46,6 @@
 #include <asm/pmac_feature.h>
 #include <asm/smu.h>
 #include <asm/sections.h>
-#include <asm/abs_addr.h>
 #include <asm/uaccess.h>
 
 #define VERSION "0.7"
@@ -122,11 +121,7 @@ static void smu_start_cmd(void)
 
 	DPRINTK("SMU: starting cmd %x, %d bytes data\n", cmd->cmd,
 		cmd->data_len);
-	DPRINTK("SMU: data buffer: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		((u8 *)cmd->data_buf)[0], ((u8 *)cmd->data_buf)[1],
-		((u8 *)cmd->data_buf)[2], ((u8 *)cmd->data_buf)[3],
-		((u8 *)cmd->data_buf)[4], ((u8 *)cmd->data_buf)[5],
-		((u8 *)cmd->data_buf)[6], ((u8 *)cmd->data_buf)[7]);
+	DPRINTK("SMU: data buffer: %8ph\n", cmd->data_buf);
 
 	/* Fill the SMU command buffer */
 	smu->cmd_buf->cmd = cmd->cmd;
@@ -503,7 +498,7 @@ int __init smu_init (void)
 	 * 32 bits value safely
 	 */
 	smu->cmd_buf_abs = (u32)smu_cmdbuf_abs;
-	smu->cmd_buf = (struct smu_cmd_buf *)abs_to_virt(smu_cmdbuf_abs);
+	smu->cmd_buf = __va(smu_cmdbuf_abs);
 
 	smu->db_node = of_find_node_by_name(NULL, "smu-doorbell");
 	if (smu->db_node == NULL) {
@@ -562,12 +557,11 @@ int __init smu_init (void)
 	return 0;
 
 fail_msg_node:
-	if (smu->msg_node)
-		of_node_put(smu->msg_node);
+	of_node_put(smu->msg_node);
 fail_db_node:
 	of_node_put(smu->db_node);
 fail_bootmem:
-	free_bootmem((unsigned long)smu, sizeof(struct smu_device));
+	free_bootmem(__pa(smu), sizeof(struct smu_device));
 	smu = NULL;
 fail_np:
 	of_node_put(np);
@@ -672,7 +666,6 @@ static struct platform_driver smu_of_platform_driver =
 {
 	.driver = {
 		.name = "smu",
-		.owner = THIS_MODULE,
 		.of_match_table = smu_platform_match,
 	},
 	.probe		= smu_platform_probe,
@@ -681,9 +674,6 @@ static struct platform_driver smu_of_platform_driver =
 static int __init smu_init_sysfs(void)
 {
 	/*
-	 * Due to sysfs bogosity, a sysdev is not a real device, so
-	 * we should in fact create both if we want sysdev semantics
-	 * for power management.
 	 * For now, we don't power manage machines with an SMU chip,
 	 * I'm a bit too far from figuring out how that works with those
 	 * new chipsets, but that will come back and bite us
@@ -1002,7 +992,7 @@ static struct smu_sdbp_header *smu_create_sdb_partition(int id)
 		       "%02x !\n", id, hdr->id);
 		goto failure;
 	}
-	if (prom_add_property(smu->of_node, prop)) {
+	if (of_add_property(smu->of_node, prop)) {
 		printk(KERN_DEBUG "SMU: Failed creating sdb-partition-%02x "
 		       "property !\n", id);
 		goto failure;
@@ -1265,7 +1255,8 @@ static unsigned int smu_fpoll(struct file *file, poll_table *wait)
 		if (pp->busy && pp->cmd.status != 1)
 			mask |= POLLIN;
 		spin_unlock_irqrestore(&pp->lock, flags);
-	} if (pp->mode == smu_file_events) {
+	}
+	if (pp->mode == smu_file_events) {
 		/* Not yet implemented */
 	}
 	return mask;

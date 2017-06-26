@@ -91,7 +91,7 @@
 		<listitem><para>
 	  	[MTD Interface]</para><para>
 		These functions provide the interface to the MTD kernel API. 
-		They are not replacable and provide functionality
+		They are not replaceable and provide functionality
 		which is complete hardware independent.
 		</para></listitem>
 		<listitem><para>
@@ -100,14 +100,14 @@
 		</para></listitem>
 		<listitem><para>
 	  	[GENERIC]</para><para>
-		Generic functions are not replacable and provide functionality
+		Generic functions are not replaceable and provide functionality
 		which is complete hardware independent.
 		</para></listitem>
 		<listitem><para>
 	  	[DEFAULT]</para><para>
 		Default functions provide hardware related functionality which is suitable
 		for most of the implementations. These functions can be replaced by the
-		board driver if neccecary. Those functions are called via pointers in the
+		board driver if necessary. Those functions are called via pointers in the
 		NAND chip description structure. The board driver can set the functions which
 		should be replaced by board dependent functions before calling nand_scan().
 		If the function pointer is NULL on entry to nand_scan() then the pointer
@@ -264,7 +264,7 @@ static void board_hwcontrol(struct mtd_info *mtd, int cmd)
 			is set up nand_scan() is called. This function tries to
 			detect and identify then chip. If a chip is found all the
 			internal data fields are initialized accordingly.
-			The structure(s) have to be zeroed out first and then filled with the neccecary 
+			The structure(s) have to be zeroed out first and then filled with the necessary
 			information about the device.
 		</para>
 		<programlisting>
@@ -327,7 +327,7 @@ module_init(board_init);
 	<sect1 id="Exit_function">
 		<title>Exit function</title>
 		<para>
-			The exit function is only neccecary if the driver is
+			The exit function is only necessary if the driver is
 			compiled as a module. It releases all resources which
 			are held by the chip driver and unregisters the partitions
 			in the MTD layer.
@@ -494,7 +494,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				in this case. See rts_from4.c and diskonchip.c for 
 				implementation reference. In those cases we must also
 				use bad block tables on FLASH, because the ECC layout is
-				interferring with the bad block marker positions.
+				interfering with the bad block marker positions.
 				See bad block table support for details.
 			</para>
 		</sect2>
@@ -542,7 +542,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 		<para>	
 			nand_scan() calls the function nand_default_bbt(). 
 			nand_default_bbt() selects appropriate default
-			bad block table desriptors depending on the chip information
+			bad block table descriptors depending on the chip information
 			which was retrieved by nand_scan().
 		</para>
 		<para>
@@ -554,7 +554,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 		<sect2 id="Flash_based_tables">
 			<title>Flash based tables</title>
 			<para>
-				It may be desired or neccecary to keep a bad block table in FLASH. 
+				It may be desired or necessary to keep a bad block table in FLASH.
 				For AG-AND chips this is mandatory, as they have no factory marked
 				bad blocks. They have factory marked good blocks. The marker pattern
 				is erased when the block is erased to be reused. So in case of
@@ -565,14 +565,14 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				of the blocks.
 			</para>
 			<para>
-				The blocks in which the tables are stored are procteted against
+				The blocks in which the tables are stored are protected against
 				accidental access by marking them bad in the memory bad block
 				table. The bad block table management functions are allowed
-				to circumvernt this protection.
+				to circumvent this protection.
 			</para>
 			<para>
 				The simplest way to activate the FLASH based bad block table support 
-				is to set the option NAND_USE_FLASH_BBT in the option field of
+				is to set the option NAND_BBT_USE_FLASH in the bbt_option field of
 				the nand chip structure before calling nand_scan(). For AG-AND
 				chips is this done by default.
 				This activates the default FLASH based bad block table functionality 
@@ -592,7 +592,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				User defined tables are created by filling out a 
 				nand_bbt_descr structure and storing the pointer in the
 				nand_chip structure member bbt_td before calling nand_scan(). 
-				If a mirror table is neccecary a second structure must be
+				If a mirror table is necessary a second structure must be
 				created and a pointer to this structure must be stored
 				in bbt_md inside the nand_chip structure. If the bbt_md 
 				member is set to NULL then only the main table is used
@@ -666,7 +666,7 @@ static void board_select_chip (struct mtd_info *mtd, int chip)
 				<para>
 				For automatic placement some blocks must be reserved for
 				bad block table storage. The number of reserved blocks is defined 
-				in the maxblocks member of the babd block table description structure.
+				in the maxblocks member of the bad block table description structure.
 				Reserving 4 blocks for mirrored tables should be a reasonable number. 
 				This also limits the number of blocks which are scanned for the bad
 				block table ident pattern.
@@ -772,20 +772,6 @@ struct nand_oobinfo {
 				If the spare area buffer is NULL then only the ECC placement is
 				done according to the default builtin scheme.
 			</para>
-		</sect2>
-		<sect2 id="User_space_placement_selection">
-			<title>User space placement selection</title>
-		<para>
-			All non ecc functions like mtd->read and mtd->write use an internal 
-			structure, which can be set by an ioctl. This structure is preset 
-			to the autoplacement default.
-	     		<programlisting>
-	ioctl (fd, MEMSETOOBSEL, oobsel);
-	     		</programlisting>
-			oobsel is a pointer to a user supplied structure of type
-			nand_oobconfig. The contents of this structure must match the 
-			criteria of the filesystem, which will be used. See an example in utils/nandwrite.c.
-		</para>
 		</sect2>
 	</sect1>	
 	<sect1 id="Spare_area_autoplacement_default">
@@ -1082,11 +1068,11 @@ in this page</entry>
   <chapter id="filesystems">
      	<title>Filesystem support</title>
 	<para>
-		The NAND driver provides all neccecary functions for a
+		The NAND driver provides all necessary functions for a
 		filesystem via the MTD interface.
 	</para>
 	<para>
-		Filesystems must be aware of the NAND pecularities and
+		Filesystems must be aware of the NAND peculiarities and
 		restrictions. One major restrictions of NAND Flash is, that you cannot 
 		write as often as you want to a page. The consecutive writes to a page, 
 		before erasing it again, are restricted to 1-3 writes, depending on the 
@@ -1133,8 +1119,6 @@ in this page</entry>
 		These constants are defined in nand.h. They are ored together to describe
 		the chip functionality.
      		<programlisting>
-/* Chip can not auto increment pages */
-#define NAND_NO_AUTOINCR	0x00000001
 /* Buswitdh is 16 bit */
 #define NAND_BUSWIDTH_16	0x00000002
 /* Device supports partial programming without padding */
@@ -1158,9 +1142,6 @@ in this page</entry>
 		These constants are defined in nand.h. They are ored together to describe
 		the functionality.
      		<programlisting>
-/* Use a flash based bad block table. This option is parsed by the
- * default bad block table function (nand_default_bbt). */
-#define NAND_USE_FLASH_BBT	0x00010000
 /* The hw ecc generator provides a syndrome instead a ecc value on read 
  * This can only work if we have the ecc bytes directly behind the 
  * data bytes. Applies for DOC and AG-AND Renesas HW Reed Solomon generators */
@@ -1235,19 +1216,13 @@ in this page</entry>
 #define	NAND_BBT_LASTBLOCK	0x00000010
 /* The bbt is at the given page, else we must scan for the bbt */
 #define NAND_BBT_ABSPAGE	0x00000020
-/* The bbt is at the given page, else we must scan for the bbt */
-#define NAND_BBT_SEARCH		0x00000040
 /* bbt is stored per chip on multichip devices */
 #define NAND_BBT_PERCHIP	0x00000080
 /* bbt has a version counter at offset veroffs */
 #define NAND_BBT_VERSION	0x00000100
 /* Create a bbt if none axists */
 #define NAND_BBT_CREATE		0x00000200
-/* Search good / bad pattern through all pages of a block */
-#define NAND_BBT_SCANALLPAGES	0x00000400
-/* Scan block empty during good / bad block scan */
-#define NAND_BBT_SCANEMPTY	0x00000800
-/* Write bbt if neccecary */
+/* Write bbt if necessary */
 #define NAND_BBT_WRITE		0x00001000
 /* Read and write back block contents when writing bbt */
 #define NAND_BBT_SAVECONTENT	0x00002000

@@ -16,6 +16,4 @@ struct isp_platform_data;
 
 int omap3_init_camera(struct isp_platform_data *pdata);
 
-void __init am335x_register_mcasp1(struct snd_platform_data *pdata);
-
 #endif

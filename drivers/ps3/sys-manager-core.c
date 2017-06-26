@@ -19,6 +19,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <asm/lv1call.h>
 #include <asm/ps3.h>
 
@@ -46,7 +47,7 @@ void ps3_sys_manager_register_ops(const struct ps3_sys_manager_ops *ops)
 }
 EXPORT_SYMBOL_GPL(ps3_sys_manager_register_ops);
 
-void ps3_sys_manager_power_off(void)
+void __noreturn ps3_sys_manager_power_off(void)
 {
 	if (ps3_sys_manager_ops.power_off)
 		ps3_sys_manager_ops.power_off(ps3_sys_manager_ops.dev);
@@ -54,7 +55,7 @@ void ps3_sys_manager_power_off(void)
 	ps3_sys_manager_halt();
 }
 
-void ps3_sys_manager_restart(void)
+void __noreturn ps3_sys_manager_restart(void)
 {
 	if (ps3_sys_manager_ops.restart)
 		ps3_sys_manager_ops.restart(ps3_sys_manager_ops.dev);
@@ -62,7 +63,7 @@ void ps3_sys_manager_restart(void)
 	ps3_sys_manager_halt();
 }
 
-void ps3_sys_manager_halt(void)
+void __noreturn ps3_sys_manager_halt(void)
 {
 	pr_emerg("System Halted, OK to turn off power\n");
 	local_irq_disable();

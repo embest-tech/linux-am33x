@@ -2,7 +2,7 @@
  * This file contains the routines for handling the MMU on those
  * PowerPC implementations where the MMU substantially follows the
  * architecture specification.  This includes the 6xx, 7xx, 7xxx,
- * 8260, and POWER3 implementations but excludes the 8xx and 4xx.
+ * and 8260 implementations but excludes the 8xx and 4xx.
  *  -- paulus
  *
  *  Derived from arch/ppc/mm/init.c:
@@ -24,6 +24,7 @@
 
 #include <linux/mm.h>
 #include <linux/init.h>
+#include <linux/export.h>
 
 #include <asm/mmu_context.h>
 #include <asm/tlbflush.h>

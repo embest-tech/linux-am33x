@@ -2,7 +2,7 @@
  *
  * keymap imported from ir-keymaps.c
  *
- * Copyright (c) 2010 by Mauro Carvalho Chehab <mchehab@redhat.com>
+ * Copyright (c) 2010 by Mauro Carvalho Chehab
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,6 +11,7 @@
  */
 
 #include <media/rc-map.h>
+#include <linux/module.h>
 
 /* AVERTV STUDIO 303 Remote */
 
@@ -82,4 +83,4 @@ module_init(init_rc_map_avertv_303)
 module_exit(exit_rc_map_avertv_303)
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@redhat.com>");
+MODULE_AUTHOR("Mauro Carvalho Chehab");

@@ -17,6 +17,7 @@
 #include <linux/errno.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <linux/mm.h>
 #include <linux/stddef.h>
 #include <linux/unistd.h>
@@ -46,7 +47,6 @@
 #include <asm/processor.h>
 #include <asm/sections.h>
 #include <asm/prom.h>
-#include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/pci-bridge.h>
@@ -169,7 +169,7 @@ static void __init maple_use_rtas_reboot_and_halt_if_present(void)
 	if (rtas_service_present("system-reboot") &&
 	    rtas_service_present("power-off")) {
 		ppc_md.restart = rtas_restart;
-		ppc_md.power_off = rtas_power_off;
+		pm_power_off = rtas_power_off;
 		ppc_md.halt = rtas_halt;
 	}
 }
@@ -203,7 +203,7 @@ static void __init maple_init_early(void)
 {
 	DBG(" -> maple_init_early\n");
 
-	iommu_init_early_dart();
+	iommu_init_early_dart(&maple_pci_controller_ops);
 
 	DBG(" <- maple_init_early\n");
 }
@@ -220,7 +220,7 @@ static void __init maple_init_IRQ(void)
 	unsigned long openpic_addr = 0;
 	int naddr, n, i, opplen, has_isus = 0;
 	struct mpic *mpic;
-	unsigned int flags = MPIC_PRIMARY;
+	unsigned int flags = 0;
 
 	/* Locate MPIC in the device-tree. Note that there is a bug
 	 * in Maple device-tree where the type of the controller is
@@ -261,7 +261,7 @@ static void __init maple_init_IRQ(void)
 		flags |= MPIC_BIG_ENDIAN;
 
 	/* XXX Maple specific bits */
-	flags |= MPIC_U3_HT_IRQS | MPIC_WANTS_RESET;
+	flags |= MPIC_U3_HT_IRQS;
 	/* All U3/U4 are big-endian, older SLOF firmware doesn't encode this */
 	flags |= MPIC_BIG_ENDIAN;
 
@@ -312,6 +312,7 @@ static int __init maple_probe(void)
 	alloc_dart_table();
 
 	hpte_init_native();
+	pm_power_off = maple_power_off;
 
 	return 1;
 }
@@ -325,7 +326,6 @@ define_machine(maple) {
 	.pci_irq_fixup		= maple_pci_irq_fixup,
 	.pci_get_legacy_ide_irq	= maple_pci_get_legacy_ide_irq,
 	.restart		= maple_restart,
-	.power_off		= maple_power_off,
 	.halt			= maple_halt,
        	.get_boot_time		= maple_get_boot_time,
        	.set_rtc_time		= maple_set_rtc_time,

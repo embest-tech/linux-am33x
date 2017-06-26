@@ -3,10 +3,7 @@
  *
  * This file contains the generic target mode <-> Linux SCSI subsystem plugin.
  *
- * Copyright (c) 2003, 2004, 2005 PyX Technologies, Inc.
- * Copyright (c) 2005, 2006, 2007 SBE, Inc.
- * Copyright (c) 2007-2010 Rising Tide Systems
- * Copyright (c) 2008-2010 Linux-iSCSI.org
+ * (c) Copyright 2003-2013 Datera, Inc.
  *
  * Nicholas A. Bellinger <nab@kernel.org>
  *
@@ -26,7 +23,6 @@
  *
  ******************************************************************************/
 
-#include <linux/version.h>
 #include <linux/string.h>
 #include <linux/parser.h>
 #include <linux/timer.h>
@@ -36,7 +32,10 @@
 #include <linux/spinlock.h>
 #include <linux/genhd.h>
 #include <linux/cdrom.h>
-#include <linux/file.h>
+#include <linux/ratelimit.h>
+#include <linux/module.h>
+#include <asm/unaligned.h>
+
 #include <scsi/scsi.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_cmnd.h>
@@ -44,15 +43,22 @@
 #include <scsi/scsi_tcq.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_device.h>
-#include <target/target_core_transport.h>
+#include <target/target_core_backend.h>
+#include <target/target_core_backend_configfs.h>
 
+#include "target_core_alua.h"
 #include "target_core_pscsi.h"
 
 #define ISPRINT(a)  ((a >= ' ') && (a <= '~'))
 
+static inline struct pscsi_dev_virt *PSCSI_DEV(struct se_device *dev)
+{
+	return container_of(dev, struct pscsi_dev_virt, dev);
+}
+
 static struct se_subsystem_api pscsi_template;
 
+static sense_reason_t pscsi_execute_cmd(struct se_cmd *cmd);
 static void pscsi_req_done(struct request *, int);
 
 /*	pscsi_attach_hba():
@@ -70,7 +76,7 @@ static int pscsi_attach_hba(struct se_hba *hba, u32 host_id)
 		return -ENOMEM;
 	}
 	phv->phv_host_id = host_id;
-	phv->phv_mode = PHV_VIRUTAL_HOST_ID;
+	phv->phv_mode = PHV_VIRTUAL_HOST_ID;
 
 	hba->hba_ptr = phv;
 
@@ -105,7 +111,7 @@ static void pscsi_detach_hba(struct se_hba *hba)
 
 static int pscsi_pmode_enable_hba(struct se_hba *hba, unsigned long mode_flag)
 {
-	struct pscsi_hba_virt *phv = (struct pscsi_hba_virt *)hba->hba_ptr;
+	struct pscsi_hba_virt *phv = hba->hba_ptr;
 	struct Scsi_Host *sh = phv->phv_lld_host;
 	/*
 	 * Release the struct Scsi_Host
@@ -115,7 +121,7 @@ static int pscsi_pmode_enable_hba(struct se_hba *hba, unsigned long mode_flag)
 			return 0;
 
 		phv->phv_lld_host = NULL;
-		phv->phv_mode = PHV_VIRUTAL_HOST_ID;
+		phv->phv_mode = PHV_VIRTUAL_HOST_ID;
 
 		pr_debug("CORE_HBA[%d] - Disabled pSCSI HBA Passthrough"
 			" %s\n", hba->hba_id, (sh->hostt->name) ?
@@ -129,10 +135,10 @@ static int pscsi_pmode_enable_hba(struct se_hba *hba, unsigned long mode_flag)
 	 * pSCSI Host ID and enable for phba mode
 	 */
 	sh = scsi_host_lookup(phv->phv_host_id);
-	if (IS_ERR(sh)) {
+	if (!sh) {
 		pr_err("pSCSI: Unable to locate SCSI Host for"
 			" phv_host_id: %d\n", phv->phv_host_id);
-		return PTR_ERR(sh);
+		return -EINVAL;
 	}
 
 	phv->phv_lld_host = sh;
@@ -216,7 +222,7 @@ pscsi_get_inquiry_vpd_serial(struct scsi_device *sdev, struct t10_wwn *wwn)
 
 	snprintf(&wwn->unit_serial[0], INQUIRY_VPD_SERIAL_LEN, "%s", &buf[4]);
 
-	wwn->t10_sub_dev->su_dev_flags |= SDF_FIRMWARE_VPD_UNIT_SERIAL;
+	wwn->t10_dev->dev_flags |= DF_FIRMWARE_VPD_UNIT_SERIAL;
 
 	kfree(buf);
 	return 0;
@@ -261,7 +267,7 @@ pscsi_get_inquiry_vpd_device_ident(struct scsi_device *sdev,
 					" length zero!\n");
 			break;
 		}
-		pr_debug("T10 VPD Identifer Length: %d\n", ident_len);
+		pr_debug("T10 VPD Identifier Length: %d\n", ident_len);
 
 		vpd = kzalloc(sizeof(struct t10_vpd), GFP_KERNEL);
 		if (!vpd) {
@@ -296,80 +302,42 @@ out:
 	kfree(buf);
 }
 
-/*	pscsi_add_device_to_list():
- *
- *
- */
-static struct se_device *pscsi_add_device_to_list(
-	struct se_hba *hba,
-	struct se_subsystem_dev *se_dev,
-	struct pscsi_dev_virt *pdv,
-	struct scsi_device *sd,
-	int dev_flags)
+static int pscsi_add_device_to_list(struct se_device *dev,
+		struct scsi_device *sd)
 {
-	struct se_device *dev;
-	struct se_dev_limits dev_limits;
-	struct request_queue *q;
-	struct queue_limits *limits;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
+	struct request_queue *q = sd->request_queue;
 
-	memset(&dev_limits, 0, sizeof(struct se_dev_limits));
+	pdv->pdv_sd = sd;
 
 	if (!sd->queue_depth) {
 		sd->queue_depth = PSCSI_DEFAULT_QUEUEDEPTH;
 
-		pr_err("Set broken SCSI Device %d:%d:%d"
+		pr_err("Set broken SCSI Device %d:%d:%llu"
 			" queue_depth to %d\n", sd->channel, sd->id,
 				sd->lun, sd->queue_depth);
 	}
-	/*
-	 * Setup the local scope queue_limits from struct request_queue->limits
-	 * to pass into transport_add_device_to_core_hba() as struct se_dev_limits.
-	 */
-	q = sd->request_queue;
-	limits = &dev_limits.limits;
-	limits->logical_block_size = sd->sector_size;
-	limits->max_hw_sectors = min_t(int, sd->host->max_sectors, queue_max_hw_sectors(q));
-	limits->max_sectors = min_t(int, sd->host->max_sectors, queue_max_sectors(q));
-	dev_limits.hw_queue_depth = sd->queue_depth;
-	dev_limits.queue_depth = sd->queue_depth;
+
+	dev->dev_attrib.hw_block_size = sd->sector_size;
+	dev->dev_attrib.hw_max_sectors =
+		min_t(int, sd->host->max_sectors, queue_max_hw_sectors(q));
+	dev->dev_attrib.hw_queue_depth = sd->queue_depth;
+
 	/*
 	 * Setup our standard INQUIRY info into se_dev->t10_wwn
 	 */
-	pscsi_set_inquiry_info(sd, &se_dev->t10_wwn);
-
-	/*
-	 * Set the pointer pdv->pdv_sd to from passed struct scsi_device,
-	 * which has already been referenced with Linux SCSI code with
-	 * scsi_device_get() in this file's pscsi_create_virtdevice().
-	 *
-	 * The passthrough operations called by the transport_add_device_*
-	 * function below will require this pointer to be set for passthroug
-	 *  ops.
-	 *
-	 * For the shutdown case in pscsi_free_device(), this struct
-	 * scsi_device  reference is released with Linux SCSI code
-	 * scsi_device_put() and the pdv->pdv_sd cleared.
-	 */
-	pdv->pdv_sd = sd;
-
-	dev = transport_add_device_to_core_hba(hba, &pscsi_template,
-				se_dev, dev_flags, pdv,
-				&dev_limits, NULL, NULL);
-	if (!dev) {
-		pdv->pdv_sd = NULL;
-		return NULL;
-	}
+	pscsi_set_inquiry_info(sd, &dev->t10_wwn);
 
 	/*
 	 * Locate VPD WWN Information used for various purposes within
 	 * the Storage Engine.
 	 */
-	if (!pscsi_get_inquiry_vpd_serial(sd, &se_dev->t10_wwn)) {
+	if (!pscsi_get_inquiry_vpd_serial(sd, &dev->t10_wwn)) {
 		/*
 		 * If VPD Unit Serial returned GOOD status, try
 		 * VPD Device Identification page (0x83).
 		 */
-		pscsi_get_inquiry_vpd_device_ident(sd, &se_dev->t10_wwn);
+		pscsi_get_inquiry_vpd_device_ident(sd, &dev->t10_wwn);
 	}
 
 	/*
@@ -377,10 +345,11 @@ static struct se_device *pscsi_add_device_to_list(
 	 */
 	if (sd->type == TYPE_TAPE)
 		pscsi_tape_read_blocksize(dev, sd);
-	return dev;
+	return 0;
 }
 
-static void *pscsi_allocate_virtdevice(struct se_hba *hba, const char *name)
+static struct se_device *pscsi_alloc_device(struct se_hba *hba,
+		const char *name)
 {
 	struct pscsi_dev_virt *pdv;
 
@@ -389,139 +358,125 @@ static void *pscsi_allocate_virtdevice(struct se_hba *hba, const char *name)
 		pr_err("Unable to allocate memory for struct pscsi_dev_virt\n");
 		return NULL;
 	}
-	pdv->pdv_se_hba = hba;
 
 	pr_debug("PSCSI: Allocated pdv: %p for %s\n", pdv, name);
-	return pdv;
+	return &pdv->dev;
 }
 
 /*
  * Called with struct Scsi_Host->host_lock called.
  */
-static struct se_device *pscsi_create_type_disk(
-	struct scsi_device *sd,
-	struct pscsi_dev_virt *pdv,
-	struct se_subsystem_dev *se_dev,
-	struct se_hba *hba)
+static int pscsi_create_type_disk(struct se_device *dev, struct scsi_device *sd)
 	__releases(sh->host_lock)
 {
-	struct se_device *dev;
-	struct pscsi_hba_virt *phv = (struct pscsi_hba_virt *)pdv->pdv_se_hba->hba_ptr;
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 	struct Scsi_Host *sh = sd->host;
 	struct block_device *bd;
-	u32 dev_flags = 0;
+	int ret;
 
 	if (scsi_device_get(sd)) {
-		pr_err("scsi_device_get() failed for %d:%d:%d:%d\n",
+		pr_err("scsi_device_get() failed for %d:%d:%d:%llu\n",
 			sh->host_no, sd->channel, sd->id, sd->lun);
 		spin_unlock_irq(sh->host_lock);
-		return NULL;
+		return -EIO;
 	}
 	spin_unlock_irq(sh->host_lock);
 	/*
 	 * Claim exclusive struct block_device access to struct scsi_device
 	 * for TYPE_DISK using supplied udev_path
 	 */
-	bd = blkdev_get_by_path(se_dev->se_dev_udev_path,
+	bd = blkdev_get_by_path(dev->udev_path,
 				FMODE_WRITE|FMODE_READ|FMODE_EXCL, pdv);
 	if (IS_ERR(bd)) {
 		pr_err("pSCSI: blkdev_get_by_path() failed\n");
 		scsi_device_put(sd);
-		return NULL;
+		return PTR_ERR(bd);
 	}
 	pdv->pdv_bd = bd;
 
-	dev = pscsi_add_device_to_list(hba, se_dev, pdv, sd, dev_flags);
-	if (!dev) {
+	ret = pscsi_add_device_to_list(dev, sd);
+	if (ret) {
 		blkdev_put(pdv->pdv_bd, FMODE_WRITE|FMODE_READ|FMODE_EXCL);
 		scsi_device_put(sd);
-		return NULL;
+		return ret;
 	}
-	pr_debug("CORE_PSCSI[%d] - Added TYPE_DISK for %d:%d:%d:%d\n",
-		phv->phv_host_id, sh->host_no, sd->channel, sd->id, sd->lun);
 
-	return dev;
+	pr_debug("CORE_PSCSI[%d] - Added TYPE_DISK for %d:%d:%d:%llu\n",
+		phv->phv_host_id, sh->host_no, sd->channel, sd->id, sd->lun);
+	return 0;
 }
 
 /*
  * Called with struct Scsi_Host->host_lock called.
  */
-static struct se_device *pscsi_create_type_rom(
-	struct scsi_device *sd,
-	struct pscsi_dev_virt *pdv,
-	struct se_subsystem_dev *se_dev,
-	struct se_hba *hba)
+static int pscsi_create_type_rom(struct se_device *dev, struct scsi_device *sd)
 	__releases(sh->host_lock)
 {
-	struct se_device *dev;
-	struct pscsi_hba_virt *phv = (struct pscsi_hba_virt *)pdv->pdv_se_hba->hba_ptr;
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
 	struct Scsi_Host *sh = sd->host;
-	u32 dev_flags = 0;
+	int ret;
 
 	if (scsi_device_get(sd)) {
-		pr_err("scsi_device_get() failed for %d:%d:%d:%d\n",
+		pr_err("scsi_device_get() failed for %d:%d:%d:%llu\n",
 			sh->host_no, sd->channel, sd->id, sd->lun);
 		spin_unlock_irq(sh->host_lock);
-		return NULL;
+		return -EIO;
 	}
 	spin_unlock_irq(sh->host_lock);
 
-	dev = pscsi_add_device_to_list(hba, se_dev, pdv, sd, dev_flags);
-	if (!dev) {
+	ret = pscsi_add_device_to_list(dev, sd);
+	if (ret) {
 		scsi_device_put(sd);
-		return NULL;
+		return ret;
 	}
-	pr_debug("CORE_PSCSI[%d] - Added Type: %s for %d:%d:%d:%d\n",
+	pr_debug("CORE_PSCSI[%d] - Added Type: %s for %d:%d:%d:%llu\n",
 		phv->phv_host_id, scsi_device_type(sd->type), sh->host_no,
 		sd->channel, sd->id, sd->lun);
 
-	return dev;
+	return 0;
 }
 
 /*
- *Called with struct Scsi_Host->host_lock called.
+ * Called with struct Scsi_Host->host_lock called.
  */
-static struct se_device *pscsi_create_type_other(
-	struct scsi_device *sd,
-	struct pscsi_dev_virt *pdv,
-	struct se_subsystem_dev *se_dev,
-	struct se_hba *hba)
+static int pscsi_create_type_other(struct se_device *dev,
+		struct scsi_device *sd)
 	__releases(sh->host_lock)
 {
-	struct se_device *dev;
-	struct pscsi_hba_virt *phv = (struct pscsi_hba_virt *)pdv->pdv_se_hba->hba_ptr;
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
 	struct Scsi_Host *sh = sd->host;
-	u32 dev_flags = 0;
+	int ret;
 
 	spin_unlock_irq(sh->host_lock);
-	dev = pscsi_add_device_to_list(hba, se_dev, pdv, sd, dev_flags);
-	if (!dev)
-		return NULL;
+	ret = pscsi_add_device_to_list(dev, sd);
+	if (ret)
+		return ret;
 
-	pr_debug("CORE_PSCSI[%d] - Added Type: %s for %d:%d:%d:%d\n",
+	pr_debug("CORE_PSCSI[%d] - Added Type: %s for %d:%d:%d:%llu\n",
 		phv->phv_host_id, scsi_device_type(sd->type), sh->host_no,
 		sd->channel, sd->id, sd->lun);
-
-	return dev;
+	return 0;
 }
 
-static struct se_device *pscsi_create_virtdevice(
-	struct se_hba *hba,
-	struct se_subsystem_dev *se_dev,
-	void *p)
+static int pscsi_configure_device(struct se_device *dev)
 {
-	struct pscsi_dev_virt *pdv = (struct pscsi_dev_virt *)p;
-	struct se_device *dev;
+	struct se_hba *hba = dev->se_hba;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 	struct scsi_device *sd;
-	struct pscsi_hba_virt *phv = (struct pscsi_hba_virt *)hba->hba_ptr;
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
 	struct Scsi_Host *sh = phv->phv_lld_host;
 	int legacy_mode_enable = 0;
+	int ret;
 
-	if (!pdv) {
-		pr_err("Unable to locate struct pscsi_dev_virt"
-				" parameter\n");
-		return ERR_PTR(-EINVAL);
+	if (!(pdv->pdv_flags & PDF_HAS_CHANNEL_ID) ||
+	    !(pdv->pdv_flags & PDF_HAS_TARGET_ID) ||
+	    !(pdv->pdv_flags & PDF_HAS_LUN_ID)) {
+		pr_err("Missing scsi_channel_id=, scsi_target_id= and"
+			" scsi_lun_id= parameters\n");
+		return -EINVAL;
 	}
+
 	/*
 	 * If not running in PHV_LLD_SCSI_HOST_NO mode, locate the
 	 * struct Scsi_Host we will need to bring the TCM/pSCSI object online
@@ -530,51 +485,49 @@ static struct se_device *pscsi_create_virtdevice(
 		if (phv->phv_mode == PHV_LLD_SCSI_HOST_NO) {
 			pr_err("pSCSI: Unable to locate struct"
 				" Scsi_Host for PHV_LLD_SCSI_HOST_NO\n");
-			return ERR_PTR(-ENODEV);
+			return -ENODEV;
 		}
 		/*
-		 * For the newer PHV_VIRUTAL_HOST_ID struct scsi_device
+		 * For the newer PHV_VIRTUAL_HOST_ID struct scsi_device
 		 * reference, we enforce that udev_path has been set
 		 */
-		if (!(se_dev->su_dev_flags & SDF_USING_UDEV_PATH)) {
+		if (!(dev->dev_flags & DF_USING_UDEV_PATH)) {
 			pr_err("pSCSI: udev_path attribute has not"
 				" been set before ENABLE=1\n");
-			return ERR_PTR(-EINVAL);
+			return -EINVAL;
 		}
 		/*
-		 * If no scsi_host_id= was passed for PHV_VIRUTAL_HOST_ID,
+		 * If no scsi_host_id= was passed for PHV_VIRTUAL_HOST_ID,
 		 * use the original TCM hba ID to reference Linux/SCSI Host No
 		 * and enable for PHV_LLD_SCSI_HOST_NO mode.
 		 */
 		if (!(pdv->pdv_flags & PDF_HAS_VIRT_HOST_ID)) {
-			spin_lock(&hba->device_lock);
-			if (!list_empty(&hba->hba_dev_list)) {
+			if (hba->dev_count) {
 				pr_err("pSCSI: Unable to set hba_mode"
 					" with active devices\n");
-				spin_unlock(&hba->device_lock);
-				return ERR_PTR(-EEXIST);
+				return -EEXIST;
 			}
-			spin_unlock(&hba->device_lock);
 
 			if (pscsi_pmode_enable_hba(hba, 1) != 1)
-				return ERR_PTR(-ENODEV);
+				return -ENODEV;
 
 			legacy_mode_enable = 1;
 			hba->hba_flags |= HBA_FLAGS_PSCSI_MODE;
 			sh = phv->phv_lld_host;
 		} else {
 			sh = scsi_host_lookup(pdv->pdv_host_id);
-			if (IS_ERR(sh)) {
+			if (!sh) {
 				pr_err("pSCSI: Unable to locate"
 					" pdv_host_id: %d\n", pdv->pdv_host_id);
-				return (struct se_device *) sh;
+				return -EINVAL;
 			}
+			pdv->pdv_lld_host = sh;
 		}
 	} else {
-		if (phv->phv_mode == PHV_VIRUTAL_HOST_ID) {
-			pr_err("pSCSI: PHV_VIRUTAL_HOST_ID set while"
+		if (phv->phv_mode == PHV_VIRTUAL_HOST_ID) {
+			pr_err("pSCSI: PHV_VIRTUAL_HOST_ID set while"
 				" struct Scsi_Host exists\n");
-			return ERR_PTR(-EEXIST);
+			return -EEXIST;
 		}
 	}
 
@@ -591,51 +544,47 @@ static struct se_device *pscsi_create_virtdevice(
 		 */
 		switch (sd->type) {
 		case TYPE_DISK:
-			dev = pscsi_create_type_disk(sd, pdv, se_dev, hba);
+			ret = pscsi_create_type_disk(dev, sd);
 			break;
 		case TYPE_ROM:
-			dev = pscsi_create_type_rom(sd, pdv, se_dev, hba);
+			ret = pscsi_create_type_rom(dev, sd);
 			break;
 		default:
-			dev = pscsi_create_type_other(sd, pdv, se_dev, hba);
+			ret = pscsi_create_type_other(dev, sd);
 			break;
 		}
 
-		if (!dev) {
-			if (phv->phv_mode == PHV_VIRUTAL_HOST_ID)
+		if (ret) {
+			if (phv->phv_mode == PHV_VIRTUAL_HOST_ID)
 				scsi_host_put(sh);
 			else if (legacy_mode_enable) {
 				pscsi_pmode_enable_hba(hba, 0);
 				hba->hba_flags &= ~HBA_FLAGS_PSCSI_MODE;
 			}
 			pdv->pdv_sd = NULL;
-			return ERR_PTR(-ENODEV);
+			return ret;
 		}
-		return dev;
+		return 0;
 	}
 	spin_unlock_irq(sh->host_lock);
 
 	pr_err("pSCSI: Unable to locate %d:%d:%d:%d\n", sh->host_no,
 		pdv->pdv_channel_id,  pdv->pdv_target_id, pdv->pdv_lun_id);
 
-	if (phv->phv_mode == PHV_VIRUTAL_HOST_ID)
+	if (phv->phv_mode == PHV_VIRTUAL_HOST_ID)
 		scsi_host_put(sh);
 	else if (legacy_mode_enable) {
 		pscsi_pmode_enable_hba(hba, 0);
 		hba->hba_flags &= ~HBA_FLAGS_PSCSI_MODE;
 	}
 
-	return ERR_PTR(-ENODEV);
+	return -ENODEV;
 }
 
-/*	pscsi_free_device(): (Part of se_subsystem_api_t template)
- *
- *
- */
-static void pscsi_free_device(void *p)
+static void pscsi_free_device(struct se_device *dev)
 {
-	struct pscsi_dev_virt *pdv = p;
-	struct pscsi_hba_virt *phv = pdv->pdv_se_hba->hba_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
 	struct scsi_device *sd = pdv->pdv_sd;
 
 	if (sd) {
@@ -655,6 +604,8 @@ static void pscsi_free_device(void *p)
 		if ((phv->phv_mode == PHV_LLD_SCSI_HOST_NO) &&
 		    (phv->phv_lld_host != NULL))
 			scsi_host_put(phv->phv_lld_host);
+		else if (pdv->pdv_lld_host)
+			scsi_host_put(pdv->pdv_lld_host);
 
 		if ((sd->type == TYPE_DISK) || (sd->type == TYPE_ROM))
 			scsi_device_put(sd);
@@ -665,37 +616,38 @@ static void pscsi_free_device(void *p)
 	kfree(pdv);
 }
 
-static inline struct pscsi_plugin_task *PSCSI_TASK(struct se_task *task)
+static void pscsi_transport_complete(struct se_cmd *cmd, struct scatterlist *sg,
+				     unsigned char *sense_buffer)
 {
-	return container_of(task, struct pscsi_plugin_task, pscsi_task);
-}
-
-
-/*	pscsi_transport_complete():
- *
- *
- */
-static int pscsi_transport_complete(struct se_task *task)
-{
-	struct pscsi_dev_virt *pdv = task->se_dev->dev_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(cmd->se_dev);
 	struct scsi_device *sd = pdv->pdv_sd;
 	int result;
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-	unsigned char *cdb = &pt->pscsi_cdb[0];
+	struct pscsi_plugin_task *pt = cmd->priv;
+	unsigned char *cdb;
+	/*
+	 * Special case for REPORT_LUNs handling where pscsi_plugin_task has
+	 * not been allocated because TCM is handling the emulation directly.
+	 */
+	if (!pt)
+		return;
 
+	cdb = &pt->pscsi_cdb[0];
 	result = pt->pscsi_result;
 	/*
 	 * Hack to make sure that Write-Protect modepage is set if R/O mode is
 	 * forced.
 	 */
+	if (!cmd->se_deve || !cmd->data_length)
+		goto after_mode_sense;
+
 	if (((cdb[0] == MODE_SENSE) || (cdb[0] == MODE_SENSE_10)) &&
 	     (status_byte(result) << 1) == SAM_STAT_GOOD) {
-		if (!task->task_se_cmd->se_deve)
-			goto after_mode_sense;
+		if (cmd->se_deve->lun_flags & TRANSPORT_LUNFLAGS_READ_ONLY) {
+			unsigned char *buf;
 
-		if (task->task_se_cmd->se_deve->lun_flags &
-				TRANSPORT_LUNFLAGS_READ_ONLY) {
-			unsigned char *buf = transport_kmap_first_data_page(task->task_se_cmd);
+			buf = transport_kmap_data_sg(cmd);
+			if (!buf)
+				; /* XXX: TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE */
 
 			if (cdb[0] == MODE_SENSE_10) {
 				if (!(buf[3] & 0x80))
@@ -705,12 +657,12 @@ static int pscsi_transport_complete(struct se_task *task)
 					buf[2] |= 0x80;
 			}
 
-			transport_kunmap_first_data_page(task->task_se_cmd);
+			transport_kunmap_data_sg(cmd);
 		}
 	}
 after_mode_sense:
 
-	if (sd->type != TYPE_TAPE)
+	if (sd->type != TYPE_TAPE || !cmd->data_length)
 		goto after_mode_select;
 
 	/*
@@ -724,7 +676,6 @@ after_mode_sense:
 	if (((cdb[0] == MODE_SELECT) || (cdb[0] == MODE_SELECT_10)) &&
 	      (status_byte(result) << 1) == SAM_STAT_GOOD) {
 		unsigned char *buf;
-		struct scatterlist *sg = task->task_sg;
 		u16 bdl;
 		u32 blocksize;
 
@@ -753,128 +704,10 @@ after_mode_sense:
 	}
 after_mode_select:
 
-	if (status_byte(result) & CHECK_CONDITION)
-		return 1;
-
-	return 0;
-}
-
-static struct se_task *
-pscsi_alloc_task(unsigned char *cdb)
-{
-	struct pscsi_plugin_task *pt;
-
-	/*
-	 * Dynamically alloc cdb space, since it may be larger than
-	 * TCM_MAX_COMMAND_SIZE
-	 */
-	pt = kzalloc(sizeof(*pt) + scsi_command_size(cdb), GFP_KERNEL);
-	if (!pt) {
-		pr_err("Unable to allocate struct pscsi_plugin_task\n");
-		return NULL;
+	if (sense_buffer && (status_byte(result) & CHECK_CONDITION)) {
+		memcpy(sense_buffer, pt->pscsi_sense, TRANSPORT_SENSE_BUFFER);
+		cmd->se_cmd_flags |= SCF_TRANSPORT_TASK_SENSE;
 	}
-
-	return &pt->pscsi_task;
-}
-
-static inline void pscsi_blk_init_request(
-	struct se_task *task,
-	struct pscsi_plugin_task *pt,
-	struct request *req,
-	int bidi_read)
-{
-	/*
-	 * Defined as "scsi command" in include/linux/blkdev.h.
-	 */
-	req->cmd_type = REQ_TYPE_BLOCK_PC;
-	/*
-	 * For the extra BIDI-COMMAND READ struct request we do not
-	 * need to setup the remaining structure members
-	 */
-	if (bidi_read)
-		return;
-	/*
-	 * Setup the done function pointer for struct request,
-	 * also set the end_io_data pointer.to struct se_task.
-	 */
-	req->end_io = pscsi_req_done;
-	req->end_io_data = task;
-	/*
-	 * Load the referenced struct se_task's SCSI CDB into
-	 * include/linux/blkdev.h:struct request->cmd
-	 */
-	req->cmd_len = scsi_command_size(pt->pscsi_cdb);
-	req->cmd = &pt->pscsi_cdb[0];
-	/*
-	 * Setup pointer for outgoing sense data.
-	 */
-	req->sense = &pt->pscsi_sense[0];
-	req->sense_len = 0;
-}
-
-/*
- * Used for pSCSI data payloads for all *NON* SCF_SCSI_DATA_SG_IO_CDB
-*/
-static int pscsi_blk_get_request(struct se_task *task)
-{
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-	struct pscsi_dev_virt *pdv = task->se_dev->dev_ptr;
-
-	pt->pscsi_req = blk_get_request(pdv->pdv_sd->request_queue,
-			(task->task_data_direction == DMA_TO_DEVICE),
-			GFP_KERNEL);
-	if (!pt->pscsi_req || IS_ERR(pt->pscsi_req)) {
-		pr_err("PSCSI: blk_get_request() failed: %ld\n",
-				IS_ERR(pt->pscsi_req));
-		return PYX_TRANSPORT_LU_COMM_FAILURE;
-	}
-	/*
-	 * Setup the newly allocated struct request for REQ_TYPE_BLOCK_PC,
-	 * and setup rq callback, CDB and sense.
-	 */
-	pscsi_blk_init_request(task, pt, pt->pscsi_req, 0);
-	return 0;
-}
-
-/*      pscsi_do_task(): (Part of se_subsystem_api_t template)
- *
- *
- */
-static int pscsi_do_task(struct se_task *task)
-{
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-	struct pscsi_dev_virt *pdv = task->se_dev->dev_ptr;
-	/*
-	 * Set the struct request->timeout value based on peripheral
-	 * device type from SCSI.
-	 */
-	if (pdv->pdv_sd->type == TYPE_DISK)
-		pt->pscsi_req->timeout = PS_TIMEOUT_DISK;
-	else
-		pt->pscsi_req->timeout = PS_TIMEOUT_OTHER;
-
-	pt->pscsi_req->retries = PS_RETRY;
-	/*
-	 * Queue the struct request into the struct scsi_device->request_queue.
-	 * Also check for HEAD_OF_QUEUE SAM TASK attr from received se_cmd
-	 * descriptor
-	 */
-	blk_execute_rq_nowait(pdv->pdv_sd->request_queue, NULL, pt->pscsi_req,
-			(task->task_se_cmd->sam_task_attr == MSG_HEAD_TAG),
-			pscsi_req_done);
-
-	return PYX_TRANSPORT_SENT_TO_TRANSPORT;
-}
-
-static void pscsi_free_task(struct se_task *task)
-{
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-
-	/*
-	 * We do not release the bio(s) here associated with this task, as
-	 * this is handled by bio_put() and pscsi_bi_endio().
-	 */
-	kfree(pt);
 }
 
 enum {
@@ -890,13 +723,11 @@ static match_table_t tokens = {
 	{Opt_err, NULL}
 };
 
-static ssize_t pscsi_set_configfs_dev_params(struct se_hba *hba,
-	struct se_subsystem_dev *se_dev,
-	const char *page,
-	ssize_t count)
+static ssize_t pscsi_set_configfs_dev_params(struct se_device *dev,
+		const char *page, ssize_t count)
 {
-	struct pscsi_dev_virt *pdv = se_dev->se_dev_su_ptr;
-	struct pscsi_hba_virt *phv = hba->hba_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
 	char *orig, *ptr, *opts;
 	substring_t args[MAX_OPT_ARGS];
 	int ret = 0, arg, token;
@@ -907,7 +738,7 @@ static ssize_t pscsi_set_configfs_dev_params(struct se_hba *hba,
 
 	orig = opts;
 
-	while ((ptr = strsep(&opts, ",")) != NULL) {
+	while ((ptr = strsep(&opts, ",\n")) != NULL) {
 		if (!*ptr)
 			continue;
 
@@ -922,14 +753,18 @@ static ssize_t pscsi_set_configfs_dev_params(struct se_hba *hba,
 				ret = -EINVAL;
 				goto out;
 			}
-			match_int(args, &arg);
+			ret = match_int(args, &arg);
+			if (ret)
+				goto out;
 			pdv->pdv_host_id = arg;
 			pr_debug("PSCSI[%d]: Referencing SCSI Host ID:"
 				" %d\n", phv->phv_host_id, pdv->pdv_host_id);
 			pdv->pdv_flags |= PDF_HAS_VIRT_HOST_ID;
 			break;
 		case Opt_scsi_channel_id:
-			match_int(args, &arg);
+			ret = match_int(args, &arg);
+			if (ret)
+				goto out;
 			pdv->pdv_channel_id = arg;
 			pr_debug("PSCSI[%d]: Referencing SCSI Channel"
 				" ID: %d\n",  phv->phv_host_id,
@@ -937,7 +772,9 @@ static ssize_t pscsi_set_configfs_dev_params(struct se_hba *hba,
 			pdv->pdv_flags |= PDF_HAS_CHANNEL_ID;
 			break;
 		case Opt_scsi_target_id:
-			match_int(args, &arg);
+			ret = match_int(args, &arg);
+			if (ret)
+				goto out;
 			pdv->pdv_target_id = arg;
 			pr_debug("PSCSI[%d]: Referencing SCSI Target"
 				" ID: %d\n", phv->phv_host_id,
@@ -945,7 +782,9 @@ static ssize_t pscsi_set_configfs_dev_params(struct se_hba *hba,
 			pdv->pdv_flags |= PDF_HAS_TARGET_ID;
 			break;
 		case Opt_scsi_lun_id:
-			match_int(args, &arg);
+			ret = match_int(args, &arg);
+			if (ret)
+				goto out;
 			pdv->pdv_lun_id = arg;
 			pr_debug("PSCSI[%d]: Referencing SCSI LUN ID:"
 				" %d\n", phv->phv_host_id, pdv->pdv_lun_id);
@@ -961,35 +800,16 @@ out:
 	return (!ret) ? count : ret;
 }
 
-static ssize_t pscsi_check_configfs_dev_params(
-	struct se_hba *hba,
-	struct se_subsystem_dev *se_dev)
+static ssize_t pscsi_show_configfs_dev_params(struct se_device *dev, char *b)
 {
-	struct pscsi_dev_virt *pdv = se_dev->se_dev_su_ptr;
-
-	if (!(pdv->pdv_flags & PDF_HAS_CHANNEL_ID) ||
-	    !(pdv->pdv_flags & PDF_HAS_TARGET_ID) ||
-	    !(pdv->pdv_flags & PDF_HAS_LUN_ID)) {
-		pr_err("Missing scsi_channel_id=, scsi_target_id= and"
-			" scsi_lun_id= parameters\n");
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-static ssize_t pscsi_show_configfs_dev_params(struct se_hba *hba,
-					      struct se_subsystem_dev *se_dev,
-					      char *b)
-{
-	struct pscsi_hba_virt *phv = hba->hba_ptr;
-        struct pscsi_dev_virt *pdv = se_dev->se_dev_su_ptr;
+	struct pscsi_hba_virt *phv = dev->se_hba->hba_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 	struct scsi_device *sd = pdv->pdv_sd;
 	unsigned char host_id[16];
 	ssize_t bl;
 	int i;
 
-	if (phv->phv_mode == PHV_VIRUTAL_HOST_ID)
+	if (phv->phv_mode == PHV_VIRTUAL_HOST_ID)
 		snprintf(host_id, 16, "%d", pdv->pdv_host_id);
 	else
 		snprintf(host_id, 16, "PHBA Mode");
@@ -1032,14 +852,14 @@ static void pscsi_bi_endio(struct bio *bio, int error)
 	bio_put(bio);
 }
 
-static inline struct bio *pscsi_get_bio(int sg_num)
+static inline struct bio *pscsi_get_bio(int nr_vecs)
 {
 	struct bio *bio;
 	/*
 	 * Use bio_malloc() following the comment in for bio -> struct request
 	 * in block/blk-core.c:blk_make_request()
 	 */
-	bio = bio_kmalloc(GFP_KERNEL, sg_num);
+	bio = bio_kmalloc(GFP_KERNEL, nr_vecs);
 	if (!bio) {
 		pr_err("PSCSI: bio_kmalloc() failed\n");
 		return NULL;
@@ -1049,39 +869,25 @@ static inline struct bio *pscsi_get_bio(int sg_num)
 	return bio;
 }
 
-static int __pscsi_map_SG(
-	struct se_task *task,
-	struct scatterlist *task_sg,
-	u32 task_sg_num,
-	int bidi_read)
+static sense_reason_t
+pscsi_map_sg(struct se_cmd *cmd, struct scatterlist *sgl, u32 sgl_nents,
+		enum dma_data_direction data_direction, struct bio **hbio)
 {
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-	struct pscsi_dev_virt *pdv = task->se_dev->dev_ptr;
-	struct bio *bio = NULL, *hbio = NULL, *tbio = NULL;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(cmd->se_dev);
+	struct bio *bio = NULL, *tbio = NULL;
 	struct page *page;
 	struct scatterlist *sg;
-	u32 data_len = task->task_size, i, len, bytes, off;
-	int nr_pages = (task->task_size + task_sg[0].offset +
+	u32 data_len = cmd->data_length, i, len, bytes, off;
+	int nr_pages = (cmd->data_length + sgl[0].offset +
 			PAGE_SIZE - 1) >> PAGE_SHIFT;
-	int nr_vecs = 0, rc, ret = PYX_TRANSPORT_OUT_OF_MEMORY_RESOURCES;
-	int rw = (task->task_data_direction == DMA_TO_DEVICE);
+	int nr_vecs = 0, rc;
+	int rw = (data_direction == DMA_TO_DEVICE);
 
-	if (!task->task_size)
-		return 0;
-	/*
-	 * For SCF_SCSI_DATA_SG_IO_CDB, Use fs/bio.c:bio_add_page() to setup
-	 * the bio_vec maplist from task->task_sg ->
-	 * struct scatterlist memory.  The struct se_task->task_sg[] currently needs
-	 * to be attached to struct bios for submission to Linux/SCSI using
-	 * struct request to struct scsi_device->request_queue.
-	 *
-	 * Note that this will be changing post v2.6.28 as Target_Core_Mod/pSCSI
-	 * is ported to upstream SCSI passthrough functionality that accepts
-	 * struct scatterlist->page_link or struct page as a paraemeter.
-	 */
+	*hbio = NULL;
+
 	pr_debug("PSCSI: nr_pages: %d\n", nr_pages);
 
-	for_each_sg(task_sg, sg, task_sg_num, i) {
+	for_each_sg(sgl, sg, sgl_nents, i) {
 		page = sg_page(sg);
 		off = sg->offset;
 		len = sg->length;
@@ -1089,7 +895,14 @@ static int __pscsi_map_SG(
 		pr_debug("PSCSI: i: %d page: %p len: %d off: %d\n", i,
 			page, len, off);
 
-		while (len > 0 && data_len > 0) {
+		/*
+		 * We only have one page of data in each sg element,
+		 * we can not cross a page boundary.
+		 */
+		if (off + len > PAGE_SIZE)
+			goto fail;
+
+		if (len > 0 && data_len > 0) {
 			bytes = min_t(unsigned int, len, PAGE_SIZE - off);
 			bytes = min(bytes, data_len);
 
@@ -1113,10 +926,10 @@ static int __pscsi_map_SG(
 				 * Set *hbio pointer to handle the case:
 				 * nr_pages > BIO_MAX_PAGES, where additional
 				 * bios need to be added to complete a given
-				 * struct se_task
+				 * command.
 				 */
-				if (!hbio)
-					hbio = tbio = bio;
+				if (!*hbio)
+					*hbio = tbio = bio;
 				else
 					tbio = tbio->bi_next = bio;
 			}
@@ -1146,121 +959,109 @@ static int __pscsi_map_SG(
 				bio = NULL;
 			}
 
-			page++;
-			len -= bytes;
 			data_len -= bytes;
-			off = 0;
 		}
 	}
+
+	return 0;
+fail:
+	while (*hbio) {
+		bio = *hbio;
+		*hbio = (*hbio)->bi_next;
+		bio_endio(bio, 0);	/* XXX: should be error */
+	}
+	return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+}
+
+static sense_reason_t
+pscsi_parse_cdb(struct se_cmd *cmd)
+{
+	if (cmd->se_cmd_flags & SCF_BIDI)
+		return TCM_UNSUPPORTED_SCSI_OPCODE;
+
+	return passthrough_parse_cdb(cmd, pscsi_execute_cmd);
+}
+
+static sense_reason_t
+pscsi_execute_cmd(struct se_cmd *cmd)
+{
+	struct scatterlist *sgl = cmd->t_data_sg;
+	u32 sgl_nents = cmd->t_data_nents;
+	enum dma_data_direction data_direction = cmd->data_direction;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(cmd->se_dev);
+	struct pscsi_plugin_task *pt;
+	struct request *req;
+	struct bio *hbio;
+	sense_reason_t ret;
+
 	/*
-	 * Setup the primary pt->pscsi_req used for non BIDI and BIDI-COMMAND
-	 * primary SCSI WRITE poayload mapped for struct se_task->task_sg[]
+	 * Dynamically alloc cdb space, since it may be larger than
+	 * TCM_MAX_COMMAND_SIZE
 	 */
-	if (!bidi_read) {
-		/*
-		 * Starting with v2.6.31, call blk_make_request() passing in *hbio to
-		 * allocate the pSCSI task a struct request.
-		 */
-		pt->pscsi_req = blk_make_request(pdv->pdv_sd->request_queue,
-					hbio, GFP_KERNEL);
-		if (!pt->pscsi_req) {
-			pr_err("pSCSI: blk_make_request() failed\n");
+	pt = kzalloc(sizeof(*pt) + scsi_command_size(cmd->t_task_cdb), GFP_KERNEL);
+	if (!pt) {
+		return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+	}
+	cmd->priv = pt;
+
+	memcpy(pt->pscsi_cdb, cmd->t_task_cdb,
+		scsi_command_size(cmd->t_task_cdb));
+
+	if (!sgl) {
+		req = blk_get_request(pdv->pdv_sd->request_queue,
+				(data_direction == DMA_TO_DEVICE),
+				GFP_KERNEL);
+		if (IS_ERR(req)) {
+			pr_err("PSCSI: blk_get_request() failed\n");
+			ret = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
 			goto fail;
 		}
-		/*
-		 * Setup the newly allocated struct request for REQ_TYPE_BLOCK_PC,
-		 * and setup rq callback, CDB and sense.
-		 */
-		pscsi_blk_init_request(task, pt, pt->pscsi_req, 0);
 
-		return task->task_sg_nents;
-	}
-	/*
-	 * Setup the secondary pt->pscsi_req->next_rq used for the extra BIDI-COMMAND
-	 * SCSI READ paylaod mapped for struct se_task->task_sg_bidi[]
-	 */
-	pt->pscsi_req->next_rq = blk_make_request(pdv->pdv_sd->request_queue,
-					hbio, GFP_KERNEL);
-	if (!pt->pscsi_req->next_rq) {
-		pr_err("pSCSI: blk_make_request() failed for BIDI\n");
-		goto fail;
-	}
-	pscsi_blk_init_request(task, pt, pt->pscsi_req->next_rq, 1);
+		blk_rq_set_block_pc(req);
+	} else {
+		BUG_ON(!cmd->data_length);
 
-	return task->task_sg_nents;
-fail:
-	while (hbio) {
-		bio = hbio;
-		hbio = hbio->bi_next;
-		bio->bi_next = NULL;
-		bio_endio(bio, 0);
-	}
-	return ret;
-}
+		ret = pscsi_map_sg(cmd, sgl, sgl_nents, data_direction, &hbio);
+		if (ret)
+			goto fail;
 
-/*
- * pSCSI maps both ->map_control_SG() and ->map_data_SG() to a single call.
- */
-static int pscsi_map_SG(struct se_task *task)
-{
-	int ret;
-
-	/*
-	 * Setup the main struct request for the task->task_sg[] payload
-	 */
-
-	ret = __pscsi_map_SG(task, task->task_sg, task->task_sg_nents, 0);
-	if (ret >= 0 && task->task_sg_bidi) {
-		/*
-		 * If present, set up the extra BIDI-COMMAND SCSI READ
-		 * struct request and payload.
-		 */
-		ret = __pscsi_map_SG(task, task->task_sg_bidi,
-					task->task_sg_nents, 1);
+		req = blk_make_request(pdv->pdv_sd->request_queue, hbio,
+				       GFP_KERNEL);
+		if (IS_ERR(req)) {
+			pr_err("pSCSI: blk_make_request() failed\n");
+			ret = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+			goto fail_free_bio;
+		}
 	}
 
-	if (ret < 0)
-		return PYX_TRANSPORT_LU_COMM_FAILURE;
+	req->end_io = pscsi_req_done;
+	req->end_io_data = cmd;
+	req->cmd_len = scsi_command_size(pt->pscsi_cdb);
+	req->cmd = &pt->pscsi_cdb[0];
+	req->sense = &pt->pscsi_sense[0];
+	req->sense_len = 0;
+	if (pdv->pdv_sd->type == TYPE_DISK)
+		req->timeout = PS_TIMEOUT_DISK;
+	else
+		req->timeout = PS_TIMEOUT_OTHER;
+	req->retries = PS_RETRY;
+
+	blk_execute_rq_nowait(pdv->pdv_sd->request_queue, NULL, req,
+			(cmd->sam_task_attr == TCM_HEAD_TAG),
+			pscsi_req_done);
+
 	return 0;
-}
 
-static int pscsi_CDB_none(struct se_task *task)
-{
-	return pscsi_blk_get_request(task);
-}
-
-/*	pscsi_get_cdb():
- *
- *
- */
-static unsigned char *pscsi_get_cdb(struct se_task *task)
-{
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-
-	return pt->pscsi_cdb;
-}
-
-/*	pscsi_get_sense_buffer():
- *
- *
- */
-static unsigned char *pscsi_get_sense_buffer(struct se_task *task)
-{
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-
-	return (unsigned char *)&pt->pscsi_sense[0];
-}
-
-/*	pscsi_get_device_rev():
- *
- *
- */
-static u32 pscsi_get_device_rev(struct se_device *dev)
-{
-	struct pscsi_dev_virt *pdv = dev->dev_ptr;
-	struct scsi_device *sd = pdv->pdv_sd;
-
-	return (sd->scsi_level - 1) ? sd->scsi_level - 1 : 1;
+fail_free_bio:
+	while (hbio) {
+		struct bio *bio = hbio;
+		hbio = hbio->bi_next;
+		bio_endio(bio, 0);	/* XXX: should be error */
+	}
+	ret = TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+fail:
+	kfree(pt);
+	return ret;
 }
 
 /*	pscsi_get_device_type():
@@ -1269,15 +1070,15 @@ static u32 pscsi_get_device_rev(struct se_device *dev)
  */
 static u32 pscsi_get_device_type(struct se_device *dev)
 {
-	struct pscsi_dev_virt *pdv = dev->dev_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 	struct scsi_device *sd = pdv->pdv_sd;
 
-	return sd->type;
+	return (sd) ? sd->type : TYPE_NO_LUN;
 }
 
 static sector_t pscsi_get_blocks(struct se_device *dev)
 {
-	struct pscsi_dev_virt *pdv = dev->dev_ptr;
+	struct pscsi_dev_virt *pdv = PSCSI_DEV(dev);
 
 	if (pdv->pdv_bd && pdv->pdv_bd->bd_part)
 		return pdv->pdv_bd->bd_part->nr_sects;
@@ -1286,91 +1087,86 @@ static sector_t pscsi_get_blocks(struct se_device *dev)
 	return 0;
 }
 
-/*	pscsi_handle_SAM_STATUS_failures():
- *
- *
- */
-static inline void pscsi_process_SAM_status(
-	struct se_task *task,
-	struct pscsi_plugin_task *pt)
+static void pscsi_req_done(struct request *req, int uptodate)
 {
-	task->task_scsi_status = status_byte(pt->pscsi_result);
-	if (task->task_scsi_status) {
-		task->task_scsi_status <<= 1;
-		pr_debug("PSCSI Status Byte exception at task: %p CDB:"
-			" 0x%02x Result: 0x%08x\n", task, pt->pscsi_cdb[0],
+	struct se_cmd *cmd = req->end_io_data;
+	struct pscsi_plugin_task *pt = cmd->priv;
+
+	pt->pscsi_result = req->errors;
+	pt->pscsi_resid = req->resid_len;
+
+	cmd->scsi_status = status_byte(pt->pscsi_result) << 1;
+	if (cmd->scsi_status) {
+		pr_debug("PSCSI Status Byte exception at cmd: %p CDB:"
+			" 0x%02x Result: 0x%08x\n", cmd, pt->pscsi_cdb[0],
 			pt->pscsi_result);
 	}
 
 	switch (host_byte(pt->pscsi_result)) {
 	case DID_OK:
-		transport_complete_task(task, (!task->task_scsi_status));
+		target_complete_cmd(cmd, cmd->scsi_status);
 		break;
 	default:
-		pr_debug("PSCSI Host Byte exception at task: %p CDB:"
-			" 0x%02x Result: 0x%08x\n", task, pt->pscsi_cdb[0],
+		pr_debug("PSCSI Host Byte exception at cmd: %p CDB:"
+			" 0x%02x Result: 0x%08x\n", cmd, pt->pscsi_cdb[0],
 			pt->pscsi_result);
-		task->task_scsi_status = SAM_STAT_CHECK_CONDITION;
-		task->task_error_status = PYX_TRANSPORT_UNKNOWN_SAM_OPCODE;
-		task->task_se_cmd->transport_error_status =
-					PYX_TRANSPORT_UNKNOWN_SAM_OPCODE;
-		transport_complete_task(task, 0);
+		target_complete_cmd(cmd, SAM_STAT_CHECK_CONDITION);
 		break;
 	}
-}
-
-static void pscsi_req_done(struct request *req, int uptodate)
-{
-	struct se_task *task = req->end_io_data;
-	struct pscsi_plugin_task *pt = PSCSI_TASK(task);
-
-	pt->pscsi_result = req->errors;
-	pt->pscsi_resid = req->resid_len;
-
-	pscsi_process_SAM_status(task, pt);
-	/*
-	 * Release BIDI-READ if present
-	 */
-	if (req->next_rq != NULL)
-		__blk_put_request(req->q, req->next_rq);
 
 	__blk_put_request(req->q, req);
-	pt->pscsi_req = NULL;
+	kfree(pt);
 }
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_pi_prot_type);
+TB_DEV_ATTR_RO(pscsi, hw_pi_prot_type);
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_block_size);
+TB_DEV_ATTR_RO(pscsi, hw_block_size);
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_max_sectors);
+TB_DEV_ATTR_RO(pscsi, hw_max_sectors);
+
+DEF_TB_DEV_ATTRIB_RO(pscsi, hw_queue_depth);
+TB_DEV_ATTR_RO(pscsi, hw_queue_depth);
+
+static struct configfs_attribute *pscsi_backend_dev_attrs[] = {
+	&pscsi_dev_attrib_hw_pi_prot_type.attr,
+	&pscsi_dev_attrib_hw_block_size.attr,
+	&pscsi_dev_attrib_hw_max_sectors.attr,
+	&pscsi_dev_attrib_hw_queue_depth.attr,
+	NULL,
+};
 
 static struct se_subsystem_api pscsi_template = {
 	.name			= "pscsi",
 	.owner			= THIS_MODULE,
-	.transport_type		= TRANSPORT_PLUGIN_PHBA_PDEV,
-	.cdb_none		= pscsi_CDB_none,
-	.map_control_SG		= pscsi_map_SG,
-	.map_data_SG		= pscsi_map_SG,
+	.transport_flags	= TRANSPORT_FLAG_PASSTHROUGH,
 	.attach_hba		= pscsi_attach_hba,
 	.detach_hba		= pscsi_detach_hba,
 	.pmode_enable_hba	= pscsi_pmode_enable_hba,
-	.allocate_virtdevice	= pscsi_allocate_virtdevice,
-	.create_virtdevice	= pscsi_create_virtdevice,
+	.alloc_device		= pscsi_alloc_device,
+	.configure_device	= pscsi_configure_device,
 	.free_device		= pscsi_free_device,
 	.transport_complete	= pscsi_transport_complete,
-	.alloc_task		= pscsi_alloc_task,
-	.do_task		= pscsi_do_task,
-	.free_task		= pscsi_free_task,
-	.check_configfs_dev_params = pscsi_check_configfs_dev_params,
+	.parse_cdb		= pscsi_parse_cdb,
 	.set_configfs_dev_params = pscsi_set_configfs_dev_params,
 	.show_configfs_dev_params = pscsi_show_configfs_dev_params,
-	.get_cdb		= pscsi_get_cdb,
-	.get_sense_buffer	= pscsi_get_sense_buffer,
-	.get_device_rev		= pscsi_get_device_rev,
 	.get_device_type	= pscsi_get_device_type,
 	.get_blocks		= pscsi_get_blocks,
 };
 
 static int __init pscsi_module_init(void)
 {
+	struct target_backend_cits *tbc = &pscsi_template.tb_cits;
+
+	target_core_setup_sub_cits(&pscsi_template);
+	tbc->tb_dev_attrib_cit.ct_attrs = pscsi_backend_dev_attrs;
+
 	return transport_subsystem_register(&pscsi_template);
 }
 
-static void pscsi_module_exit(void)
+static void __exit pscsi_module_exit(void)
 {
 	transport_subsystem_release(&pscsi_template);
 }

@@ -13,13 +13,15 @@
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/lockdep.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sysctl.h>
+#include <linux/utsname.h>
+#include <trace/events/sched.h>
 
 /*
  * The number of tasks checked:
  */
-unsigned long __read_mostly sysctl_hung_task_check_count = PID_MAX_LIMIT;
+int __read_mostly sysctl_hung_task_check_count = PID_MAX_LIMIT;
 
 /*
  * Limit number of tasks checked in a batch.
@@ -35,7 +37,7 @@ unsigned long __read_mostly sysctl_hung_task_check_count = PID_MAX_LIMIT;
  */
 unsigned long __read_mostly sysctl_hung_task_timeout_secs = CONFIG_DEFAULT_HUNG_TASK_TIMEOUT;
 
-unsigned long __read_mostly sysctl_hung_task_warnings = 10;
+int __read_mostly sysctl_hung_task_warnings = 10;
 
 static int __read_mostly did_panic;
 
@@ -50,8 +52,10 @@ unsigned int __read_mostly sysctl_hung_task_panic =
 
 static int __init hung_task_panic_setup(char *str)
 {
-	sysctl_hung_task_panic = simple_strtoul(str, NULL, 0);
+	int rc = kstrtouint(str, 0, &sysctl_hung_task_panic);
 
+	if (rc)
+		return rc;
 	return 1;
 }
 __setup("hung_task_panic=", hung_task_panic_setup);
@@ -74,36 +78,53 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 
 	/*
 	 * Ensure the task is not frozen.
-	 * Also, when a freshly created task is scheduled once, changes
-	 * its state to TASK_UNINTERRUPTIBLE without having ever been
-	 * switched out once, it musn't be checked.
+	 * Also, skip vfork and any other user process that freezer should skip.
 	 */
-	if (unlikely(t->flags & PF_FROZEN || !switch_count))
+	if (unlikely(t->flags & (PF_FROZEN | PF_FREEZER_SKIP)))
+	    return;
+
+	/*
+	 * When a freshly created task is scheduled once, changes its state to
+	 * TASK_UNINTERRUPTIBLE without having ever been switched out once, it
+	 * musn't be checked.
+	 */
+	if (unlikely(!switch_count))
 		return;
 
 	if (switch_count != t->last_switch_count) {
 		t->last_switch_count = switch_count;
 		return;
 	}
+
+	trace_sched_process_hang(t);
+
 	if (!sysctl_hung_task_warnings)
 		return;
-	sysctl_hung_task_warnings--;
+
+	if (sysctl_hung_task_warnings > 0)
+		sysctl_hung_task_warnings--;
 
 	/*
 	 * Ok, the task did not get scheduled for more than 2 minutes,
 	 * complain:
 	 */
-	printk(KERN_ERR "INFO: task %s:%d blocked for more than "
-			"%ld seconds.\n", t->comm, t->pid, timeout);
-	printk(KERN_ERR "\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\""
-			" disables this message.\n");
+	pr_err("INFO: task %s:%d blocked for more than %ld seconds.\n",
+		t->comm, t->pid, timeout);
+	pr_err("      %s %s %.*s\n",
+		print_tainted(), init_utsname()->release,
+		(int)strcspn(init_utsname()->version, " "),
+		init_utsname()->version);
+	pr_err("\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\""
+		" disables this message.\n");
 	sched_show_task(t);
 	debug_show_held_locks(t);
 
 	touch_nmi_watchdog();
 
-	if (sysctl_hung_task_panic)
+	if (sysctl_hung_task_panic) {
+		trigger_all_cpu_backtrace();
 		panic("hung_task: blocked tasks");
+	}
 }
 
 /*
@@ -113,15 +134,20 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
  * For preemptible RCU it is sufficient to call rcu_read_unlock in order
  * to exit the grace period. For classic RCU, a reschedule is required.
  */
-static void rcu_lock_break(struct task_struct *g, struct task_struct *t)
+static bool rcu_lock_break(struct task_struct *g, struct task_struct *t)
 {
+	bool can_cont;
+
 	get_task_struct(g);
 	get_task_struct(t);
 	rcu_read_unlock();
 	cond_resched();
 	rcu_read_lock();
+	can_cont = pid_alive(g) && pid_alive(t);
 	put_task_struct(t);
 	put_task_struct(g);
+
+	return can_cont;
 }
 
 /*
@@ -143,20 +169,18 @@ static void check_hung_uninterruptible_tasks(unsigned long timeout)
 		return;
 
 	rcu_read_lock();
-	do_each_thread(g, t) {
+	for_each_process_thread(g, t) {
 		if (!max_count--)
 			goto unlock;
 		if (!--batch_count) {
 			batch_count = HUNG_TASK_BATCHING;
-			rcu_lock_break(g, t);
-			/* Exit if t or g was unhashed during refresh. */
-			if (t->state == TASK_DEAD || g->state == TASK_DEAD)
+			if (!rcu_lock_break(g, t))
 				goto unlock;
 		}
 		/* use "==" to skip the TASK_KILLABLE tasks waiting on NFS */
 		if (t->state == TASK_UNINTERRUPTIBLE)
 			check_hung_task(t, timeout);
-	} while_each_thread(g, t);
+	}
  unlock:
 	rcu_read_unlock();
 }
@@ -187,6 +211,14 @@ int proc_dohung_task_timeout_secs(struct ctl_table *table, int write,
 	return ret;
 }
 
+static atomic_t reset_hung_task = ATOMIC_INIT(0);
+
+void reset_hung_task_detector(void)
+{
+	atomic_set(&reset_hung_task, 1);
+}
+EXPORT_SYMBOL_GPL(reset_hung_task_detector);
+
 /*
  * kthread which checks for tasks stuck in D state
  */
@@ -199,6 +231,9 @@ static int watchdog(void *dummy)
 
 		while (schedule_timeout_interruptible(timeout_jiffies(timeout)))
 			timeout = sysctl_hung_task_timeout_secs;
+
+		if (atomic_xchg(&reset_hung_task, 0))
+			continue;
 
 		check_hung_uninterruptible_tasks(timeout);
 	}
@@ -213,5 +248,4 @@ static int __init hung_task_init(void)
 
 	return 0;
 }
-
-module_init(hung_task_init);
+subsys_initcall(hung_task_init);

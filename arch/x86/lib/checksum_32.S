@@ -28,6 +28,7 @@
 #include <linux/linkage.h>
 #include <asm/dwarf2.h>
 #include <asm/errno.h>
+#include <asm/asm.h>
 				
 /*
  * computes a partial checksum, e.g. for TCP/UDP fragments
@@ -50,17 +51,15 @@ unsigned int csum_partial(const unsigned char * buff, int len, unsigned int sum)
 	   */		
 ENTRY(csum_partial)
 	CFI_STARTPROC
-	pushl_cfi %esi
-	CFI_REL_OFFSET esi, 0
-	pushl_cfi %ebx
-	CFI_REL_OFFSET ebx, 0
+	pushl_cfi_reg esi
+	pushl_cfi_reg ebx
 	movl 20(%esp),%eax	# Function arg: unsigned int sum
 	movl 16(%esp),%ecx	# Function arg: int len
 	movl 12(%esp),%esi	# Function arg: unsigned char *buff
 	testl $3, %esi		# Check alignment.
 	jz 2f			# Jump if alignment is ok.
 	testl $1, %esi		# Check alignment.
-	jz 10f			# Jump if alignment is boundary of 2bytes.
+	jz 10f			# Jump if alignment is boundary of 2 bytes.
 
 	# buf is odd
 	dec %ecx
@@ -126,14 +125,12 @@ ENTRY(csum_partial)
 6:	addl %ecx,%eax
 	adcl $0, %eax 
 7:	
-	testl $1, 12(%esp)
+	testb $1, 12(%esp)
 	jz 8f
 	roll $8, %eax
 8:
-	popl_cfi %ebx
-	CFI_RESTORE ebx
-	popl_cfi %esi
-	CFI_RESTORE esi
+	popl_cfi_reg ebx
+	popl_cfi_reg esi
 	ret
 	CFI_ENDPROC
 ENDPROC(csum_partial)
@@ -144,10 +141,8 @@ ENDPROC(csum_partial)
 
 ENTRY(csum_partial)
 	CFI_STARTPROC
-	pushl_cfi %esi
-	CFI_REL_OFFSET esi, 0
-	pushl_cfi %ebx
-	CFI_REL_OFFSET ebx, 0
+	pushl_cfi_reg esi
+	pushl_cfi_reg ebx
 	movl 20(%esp),%eax	# Function arg: unsigned int sum
 	movl 16(%esp),%ecx	# Function arg: int len
 	movl 12(%esp),%esi	# Function arg:	const unsigned char *buf
@@ -250,14 +245,12 @@ ENTRY(csum_partial)
 	addl %ebx,%eax
 	adcl $0,%eax
 80: 
-	testl $1, 12(%esp)
+	testb $1, 12(%esp)
 	jz 90f
 	roll $8, %eax
 90: 
-	popl_cfi %ebx
-	CFI_RESTORE ebx
-	popl_cfi %esi
-	CFI_RESTORE esi
+	popl_cfi_reg ebx
+	popl_cfi_reg esi
 	ret
 	CFI_ENDPROC
 ENDPROC(csum_partial)
@@ -282,15 +275,11 @@ unsigned int csum_partial_copy_generic (const char *src, char *dst,
 
 #define SRC(y...)			\
 	9999: y;			\
-	.section __ex_table, "a";	\
-	.long 9999b, 6001f	;	\
-	.previous
+	_ASM_EXTABLE(9999b, 6001f)
 
 #define DST(y...)			\
 	9999: y;			\
-	.section __ex_table, "a";	\
-	.long 9999b, 6002f	;	\
-	.previous
+	_ASM_EXTABLE(9999b, 6002f)
 
 #ifndef CONFIG_X86_USE_PPRO_CHECKSUM
 
@@ -301,12 +290,9 @@ ENTRY(csum_partial_copy_generic)
 	CFI_STARTPROC
 	subl  $4,%esp	
 	CFI_ADJUST_CFA_OFFSET 4
-	pushl_cfi %edi
-	CFI_REL_OFFSET edi, 0
-	pushl_cfi %esi
-	CFI_REL_OFFSET esi, 0
-	pushl_cfi %ebx
-	CFI_REL_OFFSET ebx, 0
+	pushl_cfi_reg edi
+	pushl_cfi_reg esi
+	pushl_cfi_reg ebx
 	movl ARGBASE+16(%esp),%eax	# sum
 	movl ARGBASE+12(%esp),%ecx	# len
 	movl ARGBASE+4(%esp),%esi	# src
@@ -415,12 +401,9 @@ DST(	movb %cl, (%edi)	)
 
 .previous
 
-	popl_cfi %ebx
-	CFI_RESTORE ebx
-	popl_cfi %esi
-	CFI_RESTORE esi
-	popl_cfi %edi
-	CFI_RESTORE edi
+	popl_cfi_reg ebx
+	popl_cfi_reg esi
+	popl_cfi_reg edi
 	popl_cfi %ecx			# equivalent to addl $4,%esp
 	ret	
 	CFI_ENDPROC
@@ -444,12 +427,9 @@ ENDPROC(csum_partial_copy_generic)
 		
 ENTRY(csum_partial_copy_generic)
 	CFI_STARTPROC
-	pushl_cfi %ebx
-	CFI_REL_OFFSET ebx, 0
-	pushl_cfi %edi
-	CFI_REL_OFFSET edi, 0
-	pushl_cfi %esi
-	CFI_REL_OFFSET esi, 0
+	pushl_cfi_reg ebx
+	pushl_cfi_reg edi
+	pushl_cfi_reg esi
 	movl ARGBASE+4(%esp),%esi	#src
 	movl ARGBASE+8(%esp),%edi	#dst	
 	movl ARGBASE+12(%esp),%ecx	#len
@@ -509,12 +489,9 @@ DST(	movb %dl, (%edi)         )
 	jmp  7b			
 .previous				
 
-	popl_cfi %esi
-	CFI_RESTORE esi
-	popl_cfi %edi
-	CFI_RESTORE edi
-	popl_cfi %ebx
-	CFI_RESTORE ebx
+	popl_cfi_reg esi
+	popl_cfi_reg edi
+	popl_cfi_reg ebx
 	ret
 	CFI_ENDPROC
 ENDPROC(csum_partial_copy_generic)

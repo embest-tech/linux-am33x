@@ -1,172 +1,120 @@
 /*
- * CPU idle for AM33XX SoCs
+ * AM33XX CPU idle Routines
  *
- * Copyright (C) 2011 Texas Instruments Incorporated. http://www.ti.com/
+ * Copyright (C) 2011-2013 Texas Instruments, Inc.
+ * Santosh Shilimkar <santosh.shilimkar@ti.com>
+ * Rajendra Nayak <rnayak@ti.com>
+ * Russ Dill <russ.dill@ti.com>
  *
- * Derived from Davinci CPU idle code
- * (arch/arm/mach-davinci/cpuidle.c)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation version 2.
- *
- * This program is distributed "as is" WITHOUT ANY WARRANTY of any
- * kind, whether express or implied; without even the implied warranty
- * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
-#include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/io.h>
-#include <linux/platform_device.h>
-#include <linux/cpuidle.h>
 #include <linux/sched.h>
-#include <asm/proc-fns.h>
+#include <linux/cpuidle.h>
+#include <linux/cpu_pm.h>
+#include <asm/cpuidle.h>
 
-#include <plat/emif.h>
+#include "common.h"
+#include "pm.h"
 
-#include "cpuidle33xx.h"
+#define AM33XX_FLAG_MPU_PLL		BIT(16)
+#define AM33XX_FLAG_SELF_REFRESH	BIT(17)
+#define AM33XX_FLAG_DISABLE_EMIF	BIT(18)
 
-#define AM33XX_CPUIDLE_MAX_STATES	2
+static void (*do_sram_idle)(u32 wfi_flags);
 
-struct am33xx_ops {
-	void (*enter) (u32 flags);
-	void (*exit) (u32 flags);
-	u32 flags;
+static int am33xx_enter_idle(struct cpuidle_device *dev,
+			     struct cpuidle_driver *drv, int index)
+{
+	struct cpuidle_state *state;
+	u32 wfi_flags = 0;
+
+	if (omap_irq_pending() || need_resched())
+		return index;
+
+	state = &drv->states[index];
+
+	if (state->flags & AM33XX_FLAG_SELF_REFRESH)
+		wfi_flags |= WFI_FLAG_SELF_REFRESH;
+
+	if (state->flags & AM33XX_FLAG_MPU_PLL)
+		wfi_flags |= WFI_FLAG_WAKE_M3;
+
+	cpu_pm_enter();
+	if (do_sram_idle)
+		do_sram_idle(wfi_flags);
+	cpu_pm_exit();
+
+	return index;
+}
+
+/* Power usage measured as a combination of CPU and DDR power rails */
+struct cpuidle_state am33xx_ddr2_states[] = {
+	ARM_CPUIDLE_WFI_STATE,
+	{
+		.exit_latency = 176,
+		.target_residency = 300,
+		.power_usage = 562,
+		.flags = AM33XX_FLAG_MPU_PLL,
+		.enter = am33xx_enter_idle,
+		.name = "C1",
+		.desc = "Bypass MPU PLL",
+	},
+	{
+		.exit_latency = 390,
+		.target_residency = 500,
+		.power_usage = 529,
+		.flags = AM33XX_FLAG_MPU_PLL | AM33XX_FLAG_SELF_REFRESH,
+		.enter = am33xx_enter_idle,
+		.name = "C1+SR",
+		.desc = "Bypass MPU PLL + DDR SR",
+	},
 };
 
-/* fields in am33xx_ops.flags */
-#define AM33XX_CPUIDLE_FLAGS_DDR2_PWDN	BIT(0)
+struct cpuidle_state am33xx_ddr3_states[] = {
+	ARM_CPUIDLE_WFI_STATE,
+	{
+		.exit_latency = 100,
+		.target_residency = 200,
+		.power_usage = 497,
+		.flags = AM33XX_FLAG_MPU_PLL,
+		.enter = am33xx_enter_idle,
+		.name = "C1",
+		.desc = "Bypass MPU PLL",
+	},
+};
 
 static struct cpuidle_driver am33xx_idle_driver = {
-	.name	= "cpuidle-am33xx",
-	.owner	= THIS_MODULE,
+	.name		= "am33xx_idle",
+	.owner		= THIS_MODULE,
 };
 
-static DEFINE_PER_CPU(struct cpuidle_device, am33xx_cpuidle_device);
-static void __iomem *emif_base;
-
-static void am33xx_save_ddr_power(int enter, bool pdown)
+/**
+ * am33xx_idle_init - Init routine for am33xx idle
+ *
+ * Registers the am33xx specific cpuidle driver to the cpuidle
+ * framework with the valid set of states.
+ */
+int am33xx_idle_init(bool ddr3, void (*do_idle)(u32 wfi_flags))
 {
-	u32 val;
+	do_sram_idle = do_idle;
 
-	val = __raw_readl(emif_base + EMIF4_0_SDRAM_MGMT_CTRL);
-
-	/* TODO: Choose the mode based on memory type */
-	if (enter)
-		val = SELF_REFRESH_ENABLE(64);
-	else
-		val = SELF_REFRESH_DISABLE;
-
-	__raw_writel(val, emif_base + EMIF4_0_SDRAM_MGMT_CTRL);
-}
-
-static void am33xx_c2state_enter(u32 flags)
-{
-	am33xx_save_ddr_power(1, !!(flags & AM33XX_CPUIDLE_FLAGS_DDR2_PWDN));
-}
-
-static void am33xx_c2state_exit(u32 flags)
-{
-	am33xx_save_ddr_power(0, !!(flags & AM33XX_CPUIDLE_FLAGS_DDR2_PWDN));
-}
-
-static struct am33xx_ops am33xx_states[AM33XX_CPUIDLE_MAX_STATES] = {
-	[1] = {
-		.enter	= am33xx_c2state_enter,
-		.exit	= am33xx_c2state_exit,
-	},
-};
-
-/* Actual code that puts the SoC in different idle states */
-static int am33xx_enter_idle(struct cpuidle_device *dev,
-						struct cpuidle_state *state)
-{
-	struct am33xx_ops *ops = cpuidle_get_statedata(state);
-	struct timeval before, after;
-	int idle_time;
-
-	local_irq_disable();
-	do_gettimeofday(&before);
-
-	if (ops && ops->enter)
-		ops->enter(ops->flags);
-
-	/* Wait for interrupt state */
-	cpu_do_idle();
-	if (ops && ops->exit)
-		ops->exit(ops->flags);
-
-	do_gettimeofday(&after);
-	local_irq_enable();
-	idle_time = (after.tv_sec - before.tv_sec) * USEC_PER_SEC +
-			(after.tv_usec - before.tv_usec);
-	return idle_time;
-}
-
-static int __init am33xx_cpuidle_probe(struct platform_device *pdev)
-{
-	int ret;
-	struct cpuidle_device *device;
-	struct am33xx_cpuidle_config *pdata = pdev->dev.platform_data;
-
-	device = &per_cpu(am33xx_cpuidle_device, smp_processor_id());
-
-	if (!pdata) {
-		dev_err(&pdev->dev, "cannot get platform data\n");
-		return -ENOENT;
+	if (ddr3) {
+		BUILD_BUG_ON(ARRAY_SIZE(am33xx_ddr3_states) >
+					ARRAY_SIZE(am33xx_idle_driver.states));
+		memcpy(am33xx_idle_driver.states, am33xx_ddr3_states,
+		       sizeof(am33xx_ddr3_states));
+		am33xx_idle_driver.state_count =
+						ARRAY_SIZE(am33xx_ddr3_states);
+	} else {
+		BUILD_BUG_ON(ARRAY_SIZE(am33xx_ddr2_states) >
+					ARRAY_SIZE(am33xx_idle_driver.states));
+		memcpy(am33xx_idle_driver.states, am33xx_ddr2_states,
+		       sizeof(am33xx_ddr2_states));
+		am33xx_idle_driver.state_count =
+						ARRAY_SIZE(am33xx_ddr2_states);
 	}
-
-	emif_base = pdata->emif_base;
-
-	ret = cpuidle_register_driver(&am33xx_idle_driver);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register driver\n");
-		return ret;
-	}
-
-	/* Wait for interrupt state */
-	device->states[0].enter = am33xx_enter_idle;
-	device->states[0].exit_latency = 1;
-	device->states[0].target_residency = 10000;
-	device->states[0].flags = CPUIDLE_FLAG_TIME_VALID;
-	strcpy(device->states[0].name, "WFI");
-	strcpy(device->states[0].desc, "Wait for interrupt");
-
-	/* Wait for interrupt and DDR self refresh state */
-	device->states[1].enter = am33xx_enter_idle;
-	device->states[1].exit_latency = 100;
-	device->states[1].target_residency = 10000;
-	device->states[1].flags = CPUIDLE_FLAG_TIME_VALID;
-	strcpy(device->states[1].name, "DDR SR");
-	strcpy(device->states[1].desc, "WFI and DDR Self Refresh");
-	if (pdata->ddr2_pdown)
-		am33xx_states[1].flags |= AM33XX_CPUIDLE_FLAGS_DDR2_PWDN;
-	cpuidle_set_statedata(&device->states[1], &am33xx_states[1]);
-
-	device->state_count = AM33XX_CPUIDLE_MAX_STATES;
-
-	ret = cpuidle_register_device(device);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register device\n");
-		cpuidle_unregister_driver(&am33xx_idle_driver);
-		return ret;
-	}
-
-	return 0;
+	return cpuidle_register(&am33xx_idle_driver, NULL);
 }
-
-static struct platform_driver am33xx_cpuidle_driver = {
-	.driver = {
-		.name	= "cpuidle-am33xx",
-		.owner	= THIS_MODULE,
-	},
-};
-
-static int __init am33xx_cpuidle_init(void)
-{
-	return platform_driver_probe(&am33xx_cpuidle_driver,
-						am33xx_cpuidle_probe);
-}
-device_initcall(am33xx_cpuidle_init);

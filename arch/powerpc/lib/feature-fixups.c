@@ -18,6 +18,8 @@
 #include <linux/init.h>
 #include <asm/cputable.h>
 #include <asm/code-patching.h>
+#include <asm/page.h>
+#include <asm/sections.h>
 
 
 struct fixup_entry {
@@ -128,6 +130,27 @@ void do_lwsync_fixups(unsigned long value, void *fixup_start, void *fixup_end)
 	}
 }
 
+void do_final_fixups(void)
+{
+#if defined(CONFIG_PPC64) && defined(CONFIG_RELOCATABLE)
+	int *src, *dest;
+	unsigned long length;
+
+	if (PHYSICAL_START == 0)
+		return;
+
+	src = (int *)(KERNELBASE + PHYSICAL_START);
+	dest = (int *)KERNELBASE;
+	length = (__end_interrupts - _stext) / sizeof(int);
+
+	while (length--) {
+		patch_instruction(dest, *src);
+		src++;
+		dest++;
+	}
+#endif
+}
+
 #ifdef CONFIG_FTR_FIXUP_SELFTEST
 
 #define check(x)	\
@@ -141,7 +164,7 @@ static long calc_offset(struct fixup_entry *entry, unsigned int *p)
 	return (unsigned long)p - (unsigned long)entry;
 }
 
-void test_basic_patching(void)
+static void test_basic_patching(void)
 {
 	extern unsigned int ftr_fixup_test1;
 	extern unsigned int end_ftr_fixup_test1;

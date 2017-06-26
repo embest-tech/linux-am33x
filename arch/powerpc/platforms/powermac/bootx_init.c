@@ -19,6 +19,7 @@
 #include <asm/bootx.h>
 #include <asm/btext.h>
 #include <asm/io.h>
+#include <asm/setup.h>
 
 #undef DEBUG
 #define SET_BOOT_BAT
@@ -245,7 +246,7 @@ static void __init bootx_scan_dt_build_strings(unsigned long base,
 		DBG(" detected display ! adding properties names !\n");
 		bootx_dt_add_string("linux,boot-display", mem_end);
 		bootx_dt_add_string("linux,opened", mem_end);
-		strncpy(bootx_disp_path, namep, 255);
+		strlcpy(bootx_disp_path, namep, sizeof(bootx_disp_path));
 	}
 
 	/* get and store all property names */

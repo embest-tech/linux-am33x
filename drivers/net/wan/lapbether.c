@@ -35,7 +35,6 @@
 #include <linux/if_arp.h>
 #include <linux/skbuff.h>
 #include <net/sock.h>
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <linux/mm.h>
 #include <linux/interrupt.h>
@@ -259,14 +258,13 @@ static int lapbeth_set_mac_address(struct net_device *dev, void *addr)
 }
 
 
-static struct lapb_register_struct lapbeth_callbacks = {
+static const struct lapb_register_struct lapbeth_callbacks = {
 	.connect_confirmation    = lapbeth_connected,
 	.connect_indication      = lapbeth_connected,
 	.disconnect_confirmation = lapbeth_disconnected,
 	.disconnect_indication   = lapbeth_disconnected,
 	.data_indication         = lapbeth_data_indication,
 	.data_transmit           = lapbeth_data_transmit,
-
 };
 
 /*
@@ -327,8 +325,8 @@ static int lapbeth_new_device(struct net_device *dev)
 
 	ASSERT_RTNL();
 
-	ndev = alloc_netdev(sizeof(*lapbeth), "lapb%d", 
-			   lapbeth_setup);
+	ndev = alloc_netdev(sizeof(*lapbeth), "lapb%d", NET_NAME_UNKNOWN,
+			    lapbeth_setup);
 	if (!ndev)
 		goto out;
 
@@ -372,7 +370,7 @@ static int lapbeth_device_event(struct notifier_block *this,
 				unsigned long event, void *ptr)
 {
 	struct lapbethdev *lapbeth;
-	struct net_device *dev = ptr;
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
 
 	if (dev_net(dev) != &init_net)
 		return NOTIFY_DONE;

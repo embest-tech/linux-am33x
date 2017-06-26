@@ -6,21 +6,17 @@
  * This file is released under the GPLv2.
  */
 
-#include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/device.h>
 #include <linux/io.h>
 #include <linux/pm.h>
-#include <linux/pm_runtime.h>
+#include <linux/pm_clock.h>
 #include <linux/clk.h>
+#include <linux/clkdev.h>
 #include <linux/slab.h>
 #include <linux/err.h>
 
 #ifdef CONFIG_PM
-
-struct pm_clk_data {
-	struct list_head clock_list;
-	spinlock_t lock;
-};
 
 enum pce_status {
 	PCE_STATUS_NONE = 0,
@@ -36,9 +32,25 @@ struct pm_clock_entry {
 	enum pce_status status;
 };
 
-static struct pm_clk_data *__to_pcd(struct device *dev)
+/**
+ * pm_clk_enable - Enable a clock, reporting any errors
+ * @dev: The device for the given clock
+ * @ce: PM clock entry corresponding to the clock.
+ */
+static inline int __pm_clk_enable(struct device *dev, struct pm_clock_entry *ce)
 {
-	return dev ? dev->power.subsys_data : NULL;
+	int ret;
+
+	if (ce->status < PCE_STATUS_ERROR) {
+		ret = clk_enable(ce->clk);
+		if (!ret)
+			ce->status = PCE_STATUS_ENABLED;
+		else
+			dev_err(dev, "%s: failed to enable clk %p, error %d\n",
+				__func__, ce->clk, ret);
+	}
+
+	return ret;
 }
 
 /**
@@ -48,13 +60,52 @@ static struct pm_clk_data *__to_pcd(struct device *dev)
  */
 static void pm_clk_acquire(struct device *dev, struct pm_clock_entry *ce)
 {
-	ce->clk = clk_get(dev, ce->con_id);
+	if (!ce->clk)
+		ce->clk = clk_get(dev, ce->con_id);
 	if (IS_ERR(ce->clk)) {
 		ce->status = PCE_STATUS_ERROR;
 	} else {
+		clk_prepare(ce->clk);
 		ce->status = PCE_STATUS_ACQUIRED;
 		dev_dbg(dev, "Clock %s managed by runtime PM.\n", ce->con_id);
 	}
+}
+
+static int __pm_clk_add(struct device *dev, const char *con_id,
+			struct clk *clk)
+{
+	struct pm_subsys_data *psd = dev_to_psd(dev);
+	struct pm_clock_entry *ce;
+
+	if (!psd)
+		return -EINVAL;
+
+	ce = kzalloc(sizeof(*ce), GFP_KERNEL);
+	if (!ce)
+		return -ENOMEM;
+
+	if (con_id) {
+		ce->con_id = kstrdup(con_id, GFP_KERNEL);
+		if (!ce->con_id) {
+			dev_err(dev,
+				"Not enough memory for clock connection ID.\n");
+			kfree(ce);
+			return -ENOMEM;
+		}
+	} else {
+		if (IS_ERR(clk) || !__clk_get(clk)) {
+			kfree(ce);
+			return -ENOENT;
+		}
+		ce->clk = clk;
+	}
+
+	pm_clk_acquire(dev, ce);
+
+	spin_lock_irq(&psd->lock);
+	list_add_tail(&ce->node, &psd->clock_list);
+	spin_unlock_irq(&psd->lock);
+	return 0;
 }
 
 /**
@@ -67,34 +118,20 @@ static void pm_clk_acquire(struct device *dev, struct pm_clock_entry *ce)
  */
 int pm_clk_add(struct device *dev, const char *con_id)
 {
-	struct pm_clk_data *pcd = __to_pcd(dev);
-	struct pm_clock_entry *ce;
+	return __pm_clk_add(dev, con_id, NULL);
+}
 
-	if (!pcd)
-		return -EINVAL;
-
-	ce = kzalloc(sizeof(*ce), GFP_KERNEL);
-	if (!ce) {
-		dev_err(dev, "Not enough memory for clock entry.\n");
-		return -ENOMEM;
-	}
-
-	if (con_id) {
-		ce->con_id = kstrdup(con_id, GFP_KERNEL);
-		if (!ce->con_id) {
-			dev_err(dev,
-				"Not enough memory for clock connection ID.\n");
-			kfree(ce);
-			return -ENOMEM;
-		}
-	}
-
-	pm_clk_acquire(dev, ce);
-
-	spin_lock_irq(&pcd->lock);
-	list_add_tail(&ce->node, &pcd->clock_list);
-	spin_unlock_irq(&pcd->lock);
-	return 0;
+/**
+ * pm_clk_add_clk - Start using a device clock for power management.
+ * @dev: Device whose clock is going to be used for power management.
+ * @clk: Clock pointer
+ *
+ * Add the clock to the list of clocks used for the power management of @dev.
+ * It will increment refcount on clock pointer, use clk_put() on it when done.
+ */
+int pm_clk_add_clk(struct device *dev, struct clk *clk)
+{
+	return __pm_clk_add(dev, NULL, clk);
 }
 
 /**
@@ -110,13 +147,13 @@ static void __pm_clk_remove(struct pm_clock_entry *ce)
 		if (ce->status == PCE_STATUS_ENABLED)
 			clk_disable(ce->clk);
 
-		if (ce->status >= PCE_STATUS_ACQUIRED)
+		if (ce->status >= PCE_STATUS_ACQUIRED) {
+			clk_unprepare(ce->clk);
 			clk_put(ce->clk);
+		}
 	}
 
-	if (ce->con_id)
-		kfree(ce->con_id);
-
+	kfree(ce->con_id);
 	kfree(ce);
 }
 
@@ -130,15 +167,15 @@ static void __pm_clk_remove(struct pm_clock_entry *ce)
  */
 void pm_clk_remove(struct device *dev, const char *con_id)
 {
-	struct pm_clk_data *pcd = __to_pcd(dev);
+	struct pm_subsys_data *psd = dev_to_psd(dev);
 	struct pm_clock_entry *ce;
 
-	if (!pcd)
+	if (!psd)
 		return;
 
-	spin_lock_irq(&pcd->lock);
+	spin_lock_irq(&psd->lock);
 
-	list_for_each_entry(ce, &pcd->clock_list, node) {
+	list_for_each_entry(ce, &psd->clock_list, node) {
 		if (!con_id && !ce->con_id)
 			goto remove;
 		else if (!con_id || !ce->con_id)
@@ -147,12 +184,12 @@ void pm_clk_remove(struct device *dev, const char *con_id)
 			goto remove;
 	}
 
-	spin_unlock_irq(&pcd->lock);
+	spin_unlock_irq(&psd->lock);
 	return;
 
  remove:
 	list_del(&ce->node);
-	spin_unlock_irq(&pcd->lock);
+	spin_unlock_irq(&psd->lock);
 
 	__pm_clk_remove(ce);
 }
@@ -161,23 +198,26 @@ void pm_clk_remove(struct device *dev, const char *con_id)
  * pm_clk_init - Initialize a device's list of power management clocks.
  * @dev: Device to initialize the list of PM clocks for.
  *
- * Allocate a struct pm_clk_data object, initialize its lock member and
- * make the @dev's power.subsys_data field point to it.
+ * Initialize the lock and clock_list members of the device's pm_subsys_data
+ * object.
  */
-int pm_clk_init(struct device *dev)
+void pm_clk_init(struct device *dev)
 {
-	struct pm_clk_data *pcd;
+	struct pm_subsys_data *psd = dev_to_psd(dev);
+	if (psd)
+		INIT_LIST_HEAD(&psd->clock_list);
+}
 
-	pcd = kzalloc(sizeof(*pcd), GFP_KERNEL);
-	if (!pcd) {
-		dev_err(dev, "Not enough memory for PM clock data.\n");
-		return -ENOMEM;
-	}
-
-	INIT_LIST_HEAD(&pcd->clock_list);
-	spin_lock_init(&pcd->lock);
-	dev->power.subsys_data = pcd;
-	return 0;
+/**
+ * pm_clk_create - Create and initialize a device's list of PM clocks.
+ * @dev: Device to create and initialize the list of PM clocks for.
+ *
+ * Allocate a struct pm_subsys_data object, initialize its lock and clock_list
+ * members and make the @dev's power.subsys_data field point to it.
+ */
+int pm_clk_create(struct device *dev)
+{
+	return dev_pm_get_subsys_data(dev);
 }
 
 /**
@@ -185,29 +225,28 @@ int pm_clk_init(struct device *dev)
  * @dev: Device to destroy the list of PM clocks for.
  *
  * Clear the @dev's power.subsys_data field, remove the list of clock entries
- * from the struct pm_clk_data object pointed to by it before and free
+ * from the struct pm_subsys_data object pointed to by it before and free
  * that object.
  */
 void pm_clk_destroy(struct device *dev)
 {
-	struct pm_clk_data *pcd = __to_pcd(dev);
+	struct pm_subsys_data *psd = dev_to_psd(dev);
 	struct pm_clock_entry *ce, *c;
 	struct list_head list;
 
-	if (!pcd)
+	if (!psd)
 		return;
 
-	dev->power.subsys_data = NULL;
 	INIT_LIST_HEAD(&list);
 
-	spin_lock_irq(&pcd->lock);
+	spin_lock_irq(&psd->lock);
 
-	list_for_each_entry_safe_reverse(ce, c, &pcd->clock_list, node)
+	list_for_each_entry_safe_reverse(ce, c, &psd->clock_list, node)
 		list_move(&ce->node, &list);
 
-	spin_unlock_irq(&pcd->lock);
+	spin_unlock_irq(&psd->lock);
 
-	kfree(pcd);
+	dev_pm_put_subsys_data(dev);
 
 	list_for_each_entry_safe_reverse(ce, c, &list, node) {
 		list_del(&ce->node);
@@ -215,35 +254,32 @@ void pm_clk_destroy(struct device *dev)
 	}
 }
 
-#endif /* CONFIG_PM */
-
-#ifdef CONFIG_PM_RUNTIME
-
 /**
  * pm_clk_suspend - Disable clocks in a device's PM clock list.
  * @dev: Device to disable the clocks for.
  */
 int pm_clk_suspend(struct device *dev)
 {
-	struct pm_clk_data *pcd = __to_pcd(dev);
+	struct pm_subsys_data *psd = dev_to_psd(dev);
 	struct pm_clock_entry *ce;
 	unsigned long flags;
 
 	dev_dbg(dev, "%s()\n", __func__);
 
-	if (!pcd)
+	if (!psd)
 		return 0;
 
-	spin_lock_irqsave(&pcd->lock, flags);
+	spin_lock_irqsave(&psd->lock, flags);
 
-	list_for_each_entry_reverse(ce, &pcd->clock_list, node) {
+	list_for_each_entry_reverse(ce, &psd->clock_list, node) {
 		if (ce->status < PCE_STATUS_ERROR) {
-			clk_disable(ce->clk);
+			if (ce->status == PCE_STATUS_ENABLED)
+				clk_disable(ce->clk);
 			ce->status = PCE_STATUS_ACQUIRED;
 		}
 	}
 
-	spin_unlock_irqrestore(&pcd->lock, flags);
+	spin_unlock_irqrestore(&psd->lock, flags);
 
 	return 0;
 }
@@ -254,25 +290,21 @@ int pm_clk_suspend(struct device *dev)
  */
 int pm_clk_resume(struct device *dev)
 {
-	struct pm_clk_data *pcd = __to_pcd(dev);
+	struct pm_subsys_data *psd = dev_to_psd(dev);
 	struct pm_clock_entry *ce;
 	unsigned long flags;
 
 	dev_dbg(dev, "%s()\n", __func__);
 
-	if (!pcd)
+	if (!psd)
 		return 0;
 
-	spin_lock_irqsave(&pcd->lock, flags);
+	spin_lock_irqsave(&psd->lock, flags);
 
-	list_for_each_entry(ce, &pcd->clock_list, node) {
-		if (ce->status < PCE_STATUS_ERROR) {
-			clk_enable(ce->clk);
-			ce->status = PCE_STATUS_ENABLED;
-		}
-	}
+	list_for_each_entry(ce, &psd->clock_list, node)
+		__pm_clk_enable(dev, ce);
 
-	spin_unlock_irqrestore(&pcd->lock, flags);
+	spin_unlock_irqrestore(&psd->lock, flags);
 
 	return 0;
 }
@@ -310,7 +342,7 @@ static int pm_clk_notify(struct notifier_block *nb,
 		if (dev->pm_domain)
 			break;
 
-		error = pm_clk_init(dev);
+		error = pm_clk_create(dev);
 		if (error)
 			break;
 
@@ -335,63 +367,7 @@ static int pm_clk_notify(struct notifier_block *nb,
 	return 0;
 }
 
-#else /* !CONFIG_PM_RUNTIME */
-
-#ifdef CONFIG_PM
-
-/**
- * pm_clk_suspend - Disable clocks in a device's PM clock list.
- * @dev: Device to disable the clocks for.
- */
-int pm_clk_suspend(struct device *dev)
-{
-	struct pm_clk_data *pcd = __to_pcd(dev);
-	struct pm_clock_entry *ce;
-	unsigned long flags;
-
-	dev_dbg(dev, "%s()\n", __func__);
-
-	/* If there is no driver, the clocks are already disabled. */
-	if (!pcd || !dev->driver)
-		return 0;
-
-	spin_lock_irqsave(&pcd->lock, flags);
-
-	list_for_each_entry_reverse(ce, &pcd->clock_list, node)
-		clk_disable(ce->clk);
-
-	spin_unlock_irqrestore(&pcd->lock, flags);
-
-	return 0;
-}
-
-/**
- * pm_clk_resume - Enable clocks in a device's PM clock list.
- * @dev: Device to enable the clocks for.
- */
-int pm_clk_resume(struct device *dev)
-{
-	struct pm_clk_data *pcd = __to_pcd(dev);
-	struct pm_clock_entry *ce;
-	unsigned long flags;
-
-	dev_dbg(dev, "%s()\n", __func__);
-
-	/* If there is no driver, the clocks should remain disabled. */
-	if (!pcd || !dev->driver)
-		return 0;
-
-	spin_lock_irqsave(&pcd->lock, flags);
-
-	list_for_each_entry(ce, &pcd->clock_list, node)
-		clk_enable(ce->clk);
-
-	spin_unlock_irqrestore(&pcd->lock, flags);
-
-	return 0;
-}
-
-#endif /* CONFIG_PM */
+#else /* !CONFIG_PM */
 
 /**
  * enable_clock - Enable a device clock.
@@ -404,7 +380,7 @@ static void enable_clock(struct device *dev, const char *con_id)
 
 	clk = clk_get(dev, con_id);
 	if (!IS_ERR(clk)) {
-		clk_enable(clk);
+		clk_prepare_enable(clk);
 		clk_put(clk);
 		dev_info(dev, "Runtime PM disabled, clock forced on.\n");
 	}
@@ -421,7 +397,7 @@ static void disable_clock(struct device *dev, const char *con_id)
 
 	clk = clk_get(dev, con_id);
 	if (!IS_ERR(clk)) {
-		clk_disable(clk);
+		clk_disable_unprepare(clk);
 		clk_put(clk);
 		dev_info(dev, "Runtime PM disabled, clock forced off.\n");
 	}
@@ -471,7 +447,7 @@ static int pm_clk_notify(struct notifier_block *nb,
 	return 0;
 }
 
-#endif /* !CONFIG_PM_RUNTIME */
+#endif /* !CONFIG_PM */
 
 /**
  * pm_clk_add_notifier - Add bus type notifier for power management clocks.

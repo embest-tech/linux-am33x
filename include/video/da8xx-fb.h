@@ -12,11 +12,6 @@
 #ifndef DA8XX_FB_H
 #define DA8XX_FB_H
 
-enum panel_type {
-	QVGA = 0,
-	WVGA,
-};
-
 enum panel_shade {
 	MONOCHROME = 0,
 	COLOR_ACTIVE,
@@ -28,11 +23,9 @@ enum raster_load_mode {
 	LOAD_PALETTE,
 };
 
-struct display_panel {
-	enum panel_type panel_type;
-	int max_bpp;
-	int min_bpp;
-	enum panel_shade panel_shade;
+enum da8xx_frame_complete {
+	DA8XX_FRAME_WAIT,
+	DA8XX_FRAME_NOWAIT,
 };
 
 struct da8xx_lcdc_platform_data {
@@ -43,7 +36,7 @@ struct da8xx_lcdc_platform_data {
 };
 
 struct lcd_ctrl_config {
-	const struct display_panel *p_disp_panel;
+	enum panel_shade panel_shade;
 
 	/* AC Bias Pin Frequency */
 	int ac_bias;
@@ -69,17 +62,8 @@ struct lcd_ctrl_config {
 	/* Mono 8-bit Mode: 1=D0-D7 or 0=D0-D3 */
 	unsigned char mono_8bit_mode;
 
-	/* Invert line clock */
-	unsigned char invert_line_clock;
-
-	/* Invert frame clock  */
-	unsigned char invert_frm_clock;
-
 	/* Horizontal and Vertical Sync Edge: 0=rising 1=falling */
 	unsigned char sync_edge;
-
-	/* Horizontal and Vertical Sync: Control: 0=ignore */
-	unsigned char sync_ctrl;
 
 	/* Raster Data Order Select: 1=Most-to-least 0=Least-to-most */
 	unsigned char raster_order;
@@ -104,9 +88,8 @@ struct lcd_sync_arg {
 #define FBIPUT_HSYNC		_IOW('F', 9, int)
 #define FBIPUT_VSYNC		_IOW('F', 10, int)
 
-typedef void (*vsync_callback_t)(void *arg);
-int register_vsync_cb(vsync_callback_t handler, void *arg, int idx);
-int unregister_vsync_cb(vsync_callback_t handler, void *arg, int idx);
+/* Proprietary FB_SYNC_ flags */
+#define FB_SYNC_CLK_INVERT 0x40000000
 
 #endif  /* ifndef DA8XX_FB_H */
 

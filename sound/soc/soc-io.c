@@ -13,407 +13,261 @@
 
 #include <linux/i2c.h>
 #include <linux/spi/spi.h>
+#include <linux/regmap.h>
+#include <linux/export.h>
 #include <sound/soc.h>
 
-#include <trace/events/asoc.h>
-
-#ifdef CONFIG_SPI_MASTER
-static int do_spi_write(void *control, const char *data, int len)
-{
-	struct spi_device *spi = control;
-	int ret;
-
-	ret = spi_write(spi, data, len);
-	if (ret < 0)
-		return ret;
-
-	return len;
-}
-#endif
-
-static int do_hw_write(struct snd_soc_codec *codec, unsigned int reg,
-		       unsigned int value, const void *data, int len)
-{
-	int ret;
-
-	if (!snd_soc_codec_volatile_register(codec, reg) &&
-	    reg < codec->driver->reg_cache_size &&
-	    !codec->cache_bypass) {
-		ret = snd_soc_cache_write(codec, reg, value);
-		if (ret < 0)
-			return -1;
-	}
-
-	if (codec->cache_only) {
-		codec->cache_sync = 1;
-		return 0;
-	}
-
-	ret = codec->hw_write(codec->control_data, data, len);
-	if (ret == len)
-		return 0;
-	if (ret < 0)
-		return ret;
-	else
-		return -EIO;
-}
-
-static unsigned int hw_read(struct snd_soc_codec *codec, unsigned int reg)
-{
-	int ret;
-	unsigned int val;
-
-	if (reg >= codec->driver->reg_cache_size ||
-	    snd_soc_codec_volatile_register(codec, reg) ||
-	    codec->cache_bypass) {
-		if (codec->cache_only)
-			return -1;
-
-		BUG_ON(!codec->hw_read);
-		return codec->hw_read(codec, reg);
-	}
-
-	ret = snd_soc_cache_read(codec, reg, &val);
-	if (ret < 0)
-		return -1;
-	return val;
-}
-
-static int snd_soc_4_12_write(struct snd_soc_codec *codec, unsigned int reg,
-			      unsigned int value)
-{
-	u16 data;
-
-	data = cpu_to_be16((reg << 12) | (value & 0xffffff));
-
-	return do_hw_write(codec, reg, value, &data, 2);
-}
-
-static int snd_soc_7_9_write(struct snd_soc_codec *codec, unsigned int reg,
-			     unsigned int value)
-{
-	u16 data;
-
-	data = cpu_to_be16((reg << 9) | (value & 0x1ff));
-
-	return do_hw_write(codec, reg, value, &data, 2);
-}
-
-static int snd_soc_8_8_write(struct snd_soc_codec *codec, unsigned int reg,
-			     unsigned int value)
-{
-	u8 data[2];
-
-	reg &= 0xff;
-	data[0] = reg;
-	data[1] = value & 0xff;
-
-	return do_hw_write(codec, reg, value, data, 2);
-}
-
-static int snd_soc_8_16_write(struct snd_soc_codec *codec, unsigned int reg,
-			      unsigned int value)
-{
-	u8 data[3];
-	u16 val = cpu_to_be16(value);
-
-	data[0] = reg;
-	memcpy(&data[1], &val, sizeof(val));
-
-	return do_hw_write(codec, reg, value, data, 3);
-}
-
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-static unsigned int do_i2c_read(struct snd_soc_codec *codec,
-				void *reg, int reglen,
-				void *data, int datalen)
-{
-	struct i2c_msg xfer[2];
-	int ret;
-	struct i2c_client *client = codec->control_data;
-
-	/* Write register */
-	xfer[0].addr = client->addr;
-	xfer[0].flags = 0;
-	xfer[0].len = reglen;
-	xfer[0].buf = reg;
-
-	/* Read data */
-	xfer[1].addr = client->addr;
-	xfer[1].flags = I2C_M_RD;
-	xfer[1].len = datalen;
-	xfer[1].buf = data;
-
-	ret = i2c_transfer(client->adapter, xfer, 2);
-	if (ret == 2)
-		return 0;
-	else if (ret < 0)
-		return ret;
-	else
-		return -EIO;
-}
-#endif
-
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-static unsigned int snd_soc_8_8_read_i2c(struct snd_soc_codec *codec,
-					 unsigned int r)
-{
-	u8 reg = r;
-	u8 data;
-	int ret;
-
-	ret = do_i2c_read(codec, &reg, 1, &data, 1);
-	if (ret < 0)
-		return 0;
-	return data;
-}
-#else
-#define snd_soc_8_8_read_i2c NULL
-#endif
-
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-static unsigned int snd_soc_8_16_read_i2c(struct snd_soc_codec *codec,
-					  unsigned int r)
-{
-	u8 reg = r;
-	u16 data;
-	int ret;
-
-	ret = do_i2c_read(codec, &reg, 1, &data, 2);
-	if (ret < 0)
-		return 0;
-	return (data >> 8) | ((data & 0xff) << 8);
-}
-#else
-#define snd_soc_8_16_read_i2c NULL
-#endif
-
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-static unsigned int snd_soc_16_8_read_i2c(struct snd_soc_codec *codec,
-					  unsigned int r)
-{
-	u16 reg = r;
-	u8 data;
-	int ret;
-
-	ret = do_i2c_read(codec, &reg, 2, &data, 1);
-	if (ret < 0)
-		return 0;
-	return data;
-}
-#else
-#define snd_soc_16_8_read_i2c NULL
-#endif
-
-#if defined(CONFIG_SPI_MASTER)
-static unsigned int snd_soc_16_8_read_spi(struct snd_soc_codec *codec,
-		                          unsigned int r)
-{
-	struct spi_device *spi = codec->control_data;
-
-	const u16 reg = cpu_to_be16(r | 0x100);
-	u8 data;
-	int ret;
-
-	ret = spi_write_then_read(spi, &reg, 2, &data, 1);
-	if (ret < 0)
-		return 0;
-	return data;
-}
-#else
-#define snd_soc_16_8_read_spi NULL
-#endif
-
-static int snd_soc_16_8_write(struct snd_soc_codec *codec, unsigned int reg,
-			      unsigned int value)
-{
-	u8 data[3];
-	u16 rval = cpu_to_be16(reg);
-
-	memcpy(data, &rval, sizeof(rval));
-	data[2] = value;
-
-	return do_hw_write(codec, reg, value, data, 3);
-}
-
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-static unsigned int snd_soc_16_16_read_i2c(struct snd_soc_codec *codec,
-					   unsigned int r)
-{
-	u16 reg = cpu_to_be16(r);
-	u16 data;
-	int ret;
-
-	ret = do_i2c_read(codec, &reg, 2, &data, 2);
-	if (ret < 0)
-		return 0;
-	return be16_to_cpu(data);
-}
-#else
-#define snd_soc_16_16_read_i2c NULL
-#endif
-
-static int snd_soc_16_16_write(struct snd_soc_codec *codec, unsigned int reg,
-			       unsigned int value)
-{
-	u16 data[2];
-
-	data[0] = cpu_to_be16(reg);
-	data[1] = cpu_to_be16(value);
-
-	return do_hw_write(codec, reg, value, data, sizeof(data));
-}
-
-/* Primitive bulk write support for soc-cache.  The data pointed to by
- * `data' needs to already be in the form the hardware expects
- * including any leading register specific data.  Any data written
- * through this function will not go through the cache as it only
- * handles writing to volatile or out of bounds registers.
+/**
+ * snd_soc_component_read() - Read register value
+ * @component: Component to read from
+ * @reg: Register to read
+ * @val: Pointer to where the read value is stored
+ *
+ * Return: 0 on success, a negative error code otherwise.
  */
-static int snd_soc_hw_bulk_write_raw(struct snd_soc_codec *codec, unsigned int reg,
-				     const void *data, size_t len)
+int snd_soc_component_read(struct snd_soc_component *component,
+	unsigned int reg, unsigned int *val)
 {
 	int ret;
 
-	/* To ensure that we don't get out of sync with the cache, check
-	 * whether the base register is volatile or if we've directly asked
-	 * to bypass the cache.  Out of bounds registers are considered
-	 * volatile.
-	 */
-	if (!codec->cache_bypass
-	    && !snd_soc_codec_volatile_register(codec, reg)
-	    && reg < codec->driver->reg_cache_size)
-		return -EINVAL;
-
-	switch (codec->control_type) {
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-	case SND_SOC_I2C:
-		ret = i2c_master_send(to_i2c_client(codec->dev), data, len);
-		break;
-#endif
-#if defined(CONFIG_SPI_MASTER)
-	case SND_SOC_SPI:
-		ret = spi_write(to_spi_device(codec->dev), data, len);
-		break;
-#endif
-	default:
-		BUG();
-	}
-
-	if (ret == len)
-		return 0;
-	if (ret < 0)
-		return ret;
+	if (component->regmap)
+		ret = regmap_read(component->regmap, reg, val);
+	else if (component->read)
+		ret = component->read(component, reg, val);
 	else
-		return -EIO;
-}
+		ret = -EIO;
 
-static struct {
-	int addr_bits;
-	int data_bits;
-	int (*write)(struct snd_soc_codec *codec, unsigned int, unsigned int);
-	unsigned int (*read)(struct snd_soc_codec *, unsigned int);
-	unsigned int (*i2c_read)(struct snd_soc_codec *, unsigned int);
-	unsigned int (*spi_read)(struct snd_soc_codec *, unsigned int);
-} io_types[] = {
-	{
-		.addr_bits = 4, .data_bits = 12,
-		.write = snd_soc_4_12_write,
-	},
-	{
-		.addr_bits = 7, .data_bits = 9,
-		.write = snd_soc_7_9_write,
-	},
-	{
-		.addr_bits = 8, .data_bits = 8,
-		.write = snd_soc_8_8_write,
-		.i2c_read = snd_soc_8_8_read_i2c,
-	},
-	{
-		.addr_bits = 8, .data_bits = 16,
-		.write = snd_soc_8_16_write,
-		.i2c_read = snd_soc_8_16_read_i2c,
-	},
-	{
-		.addr_bits = 16, .data_bits = 8,
-		.write = snd_soc_16_8_write,
-		.i2c_read = snd_soc_16_8_read_i2c,
-		.spi_read = snd_soc_16_8_read_spi,
-	},
-	{
-		.addr_bits = 16, .data_bits = 16,
-		.write = snd_soc_16_16_write,
-		.i2c_read = snd_soc_16_16_read_i2c,
-	},
-};
+	return ret;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_read);
 
 /**
- * snd_soc_codec_set_cache_io: Set up standard I/O functions.
+ * snd_soc_component_write() - Write register value
+ * @component: Component to write to
+ * @reg: Register to write
+ * @val: Value to write to the register
  *
- * @codec: CODEC to configure.
- * @addr_bits: Number of bits of register address data.
- * @data_bits: Number of bits of data per register.
- * @control: Control bus used.
- *
- * Register formats are frequently shared between many I2C and SPI
- * devices.  In order to promote code reuse the ASoC core provides
- * some standard implementations of CODEC read and write operations
- * which can be set up using this function.
- *
- * The caller is responsible for allocating and initialising the
- * actual cache.
- *
- * Note that at present this code cannot be used by CODECs with
- * volatile registers.
+ * Return: 0 on success, a negative error code otherwise.
  */
-int snd_soc_codec_set_cache_io(struct snd_soc_codec *codec,
-			       int addr_bits, int data_bits,
-			       enum snd_soc_control_type control)
+int snd_soc_component_write(struct snd_soc_component *component,
+	unsigned int reg, unsigned int val)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(io_types); i++)
-		if (io_types[i].addr_bits == addr_bits &&
-		    io_types[i].data_bits == data_bits)
-			break;
-	if (i == ARRAY_SIZE(io_types)) {
-		printk(KERN_ERR
-		       "No I/O functions for %d bit address %d bit data\n",
-		       addr_bits, data_bits);
-		return -EINVAL;
-	}
-
-	codec->write = io_types[i].write;
-	codec->read = hw_read;
-	codec->bulk_write_raw = snd_soc_hw_bulk_write_raw;
-
-	switch (control) {
-	case SND_SOC_I2C:
-#if defined(CONFIG_I2C) || (defined(CONFIG_I2C_MODULE) && defined(MODULE))
-		codec->hw_write = (hw_write_t)i2c_master_send;
-#endif
-		if (io_types[i].i2c_read)
-			codec->hw_read = io_types[i].i2c_read;
-
-		codec->control_data = container_of(codec->dev,
-						   struct i2c_client,
-						   dev);
-		break;
-
-	case SND_SOC_SPI:
-#ifdef CONFIG_SPI_MASTER
-		codec->hw_write = do_spi_write;
-#endif
-		if (io_types[i].spi_read)
-			codec->hw_read = io_types[i].spi_read;
-
-		codec->control_data = container_of(codec->dev,
-						   struct spi_device,
-						   dev);
-		break;
-	}
-
-	return 0;
+	if (component->regmap)
+		return regmap_write(component->regmap, reg, val);
+	else if (component->write)
+		return component->write(component, reg, val);
+	else
+		return -EIO;
 }
-EXPORT_SYMBOL_GPL(snd_soc_codec_set_cache_io);
+EXPORT_SYMBOL_GPL(snd_soc_component_write);
 
+static int snd_soc_component_update_bits_legacy(
+	struct snd_soc_component *component, unsigned int reg,
+	unsigned int mask, unsigned int val, bool *change)
+{
+	unsigned int old, new;
+	int ret;
+
+	if (!component->read || !component->write)
+		return -EIO;
+
+	mutex_lock(&component->io_mutex);
+
+	ret = component->read(component, reg, &old);
+	if (ret < 0)
+		goto out_unlock;
+
+	new = (old & ~mask) | (val & mask);
+	*change = old != new;
+	if (*change)
+		ret = component->write(component, reg, new);
+out_unlock:
+	mutex_unlock(&component->io_mutex);
+
+	return ret;
+}
+
+/**
+ * snd_soc_component_update_bits() - Perform read/modify/write cycle
+ * @component: Component to update
+ * @reg: Register to update
+ * @mask: Mask that specifies which bits to update
+ * @val: New value for the bits specified by mask
+ *
+ * Return: 1 if the operation was successful and the value of the register
+ * changed, 0 if the operation was successful, but the value did not change.
+ * Returns a negative error code otherwise.
+ */
+int snd_soc_component_update_bits(struct snd_soc_component *component,
+	unsigned int reg, unsigned int mask, unsigned int val)
+{
+	bool change;
+	int ret;
+
+	if (component->regmap)
+		ret = regmap_update_bits_check(component->regmap, reg, mask,
+			val, &change);
+	else
+		ret = snd_soc_component_update_bits_legacy(component, reg,
+			mask, val, &change);
+
+	if (ret < 0)
+		return ret;
+	return change;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_update_bits);
+
+/**
+ * snd_soc_component_update_bits_async() - Perform asynchronous
+ *  read/modify/write cycle
+ * @component: Component to update
+ * @reg: Register to update
+ * @mask: Mask that specifies which bits to update
+ * @val: New value for the bits specified by mask
+ *
+ * This function is similar to snd_soc_component_update_bits(), but the update
+ * operation is scheduled asynchronously. This means it may not be completed
+ * when the function returns. To make sure that all scheduled updates have been
+ * completed snd_soc_component_async_complete() must be called.
+ *
+ * Return: 1 if the operation was successful and the value of the register
+ * changed, 0 if the operation was successful, but the value did not change.
+ * Returns a negative error code otherwise.
+ */
+int snd_soc_component_update_bits_async(struct snd_soc_component *component,
+	unsigned int reg, unsigned int mask, unsigned int val)
+{
+	bool change;
+	int ret;
+
+	if (component->regmap)
+		ret = regmap_update_bits_check_async(component->regmap, reg,
+			mask, val, &change);
+	else
+		ret = snd_soc_component_update_bits_legacy(component, reg,
+			mask, val, &change);
+
+	if (ret < 0)
+		return ret;
+	return change;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_update_bits_async);
+
+/**
+ * snd_soc_component_async_complete() - Ensure asynchronous I/O has completed
+ * @component: Component for which to wait
+ *
+ * This function blocks until all asynchronous I/O which has previously been
+ * scheduled using snd_soc_component_update_bits_async() has completed.
+ */
+void snd_soc_component_async_complete(struct snd_soc_component *component)
+{
+	if (component->regmap)
+		regmap_async_complete(component->regmap);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_async_complete);
+
+/**
+ * snd_soc_component_test_bits - Test register for change
+ * @component: component
+ * @reg: Register to test
+ * @mask: Mask that specifies which bits to test
+ * @value: Value to test against
+ *
+ * Tests a register with a new value and checks if the new value is
+ * different from the old value.
+ *
+ * Return: 1 for change, otherwise 0.
+ */
+int snd_soc_component_test_bits(struct snd_soc_component *component,
+	unsigned int reg, unsigned int mask, unsigned int value)
+{
+	unsigned int old, new;
+	int ret;
+
+	ret = snd_soc_component_read(component, reg, &old);
+	if (ret < 0)
+		return ret;
+	new = (old & ~mask) | value;
+	return old != new;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_test_bits);
+
+unsigned int snd_soc_read(struct snd_soc_codec *codec, unsigned int reg)
+{
+	unsigned int val;
+	int ret;
+
+	ret = snd_soc_component_read(&codec->component, reg, &val);
+	if (ret < 0)
+		return -1;
+
+	return val;
+}
+EXPORT_SYMBOL_GPL(snd_soc_read);
+
+int snd_soc_write(struct snd_soc_codec *codec, unsigned int reg,
+	unsigned int val)
+{
+	return snd_soc_component_write(&codec->component, reg, val);
+}
+EXPORT_SYMBOL_GPL(snd_soc_write);
+
+/**
+ * snd_soc_update_bits - update codec register bits
+ * @codec: audio codec
+ * @reg: codec register
+ * @mask: register mask
+ * @value: new value
+ *
+ * Writes new register value.
+ *
+ * Returns 1 for change, 0 for no change, or negative error code.
+ */
+int snd_soc_update_bits(struct snd_soc_codec *codec, unsigned int reg,
+				unsigned int mask, unsigned int value)
+{
+	return snd_soc_component_update_bits(&codec->component, reg, mask,
+		value);
+}
+EXPORT_SYMBOL_GPL(snd_soc_update_bits);
+
+/**
+ * snd_soc_test_bits - test register for change
+ * @codec: audio codec
+ * @reg: codec register
+ * @mask: register mask
+ * @value: new value
+ *
+ * Tests a register with a new value and checks if the new value is
+ * different from the old value.
+ *
+ * Returns 1 for change else 0.
+ */
+int snd_soc_test_bits(struct snd_soc_codec *codec, unsigned int reg,
+				unsigned int mask, unsigned int value)
+{
+	return snd_soc_component_test_bits(&codec->component, reg, mask, value);
+}
+EXPORT_SYMBOL_GPL(snd_soc_test_bits);
+
+int snd_soc_platform_read(struct snd_soc_platform *platform,
+					unsigned int reg)
+{
+	unsigned int val;
+	int ret;
+
+	ret = snd_soc_component_read(&platform->component, reg, &val);
+	if (ret < 0)
+		return -1;
+
+	return val;
+}
+EXPORT_SYMBOL_GPL(snd_soc_platform_read);
+
+int snd_soc_platform_write(struct snd_soc_platform *platform,
+					 unsigned int reg, unsigned int val)
+{
+	return snd_soc_component_write(&platform->component, reg, val);
+}
+EXPORT_SYMBOL_GPL(snd_soc_platform_write);

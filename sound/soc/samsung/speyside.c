@@ -13,17 +13,19 @@
 #include <sound/soc-dapm.h>
 #include <sound/jack.h>
 #include <linux/gpio.h>
+#include <linux/module.h>
 
 #include "../codecs/wm8996.h"
 #include "../codecs/wm9081.h"
 
 #define WM8996_HPSEL_GPIO 214
+#define MCLK_AUDIO_RATE (512 * 48000)
 
 static int speyside_set_bias_level(struct snd_soc_card *card,
 				   struct snd_soc_dapm_context *dapm,
 				   enum snd_soc_bias_level level)
 {
-	struct snd_soc_dai *codec_dai = card->rtd[0].codec_dai;
+	struct snd_soc_dai *codec_dai = card->rtd[1].codec_dai;
 	int ret;
 
 	if (dapm->dev != codec_dai->dev)
@@ -55,7 +57,7 @@ static int speyside_set_bias_level_post(struct snd_soc_card *card,
 					struct snd_soc_dapm_context *dapm,
 					enum snd_soc_bias_level level)
 {
-	struct snd_soc_dai *codec_dai = card->rtd[0].codec_dai;
+	struct snd_soc_dai *codec_dai = card->rtd[1].codec_dai;
 	int ret;
 
 	if (dapm->dev != codec_dai->dev)
@@ -66,7 +68,7 @@ static int speyside_set_bias_level_post(struct snd_soc_card *card,
 		if (card->dapm.bias_level == SND_SOC_BIAS_STANDBY) {
 			ret = snd_soc_dai_set_pll(codec_dai, 0,
 						  WM8996_FLL_MCLK2,
-						  32768, 48000 * 256);
+						  32768, MCLK_AUDIO_RATE);
 			if (ret < 0) {
 				pr_err("Failed to start FLL\n");
 				return ret;
@@ -74,7 +76,7 @@ static int speyside_set_bias_level_post(struct snd_soc_card *card,
 
 			ret = snd_soc_dai_set_sysclk(codec_dai,
 						     WM8996_SYSCLK_FLL,
-						     48000 * 256,
+						     MCLK_AUDIO_RATE,
 						     SND_SOC_CLOCK_IN);
 			if (ret < 0)
 				return ret;
@@ -90,33 +92,6 @@ static int speyside_set_bias_level_post(struct snd_soc_card *card,
 	return 0;
 }
 
-static int speyside_hw_params(struct snd_pcm_substream *substream,
-			      struct snd_pcm_hw_params *params)
-{
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
-	int ret;
-
-	ret = snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_I2S
-					 | SND_SOC_DAIFMT_NB_NF
-					 | SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		return ret;
-
-	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_I2S
-					 | SND_SOC_DAIFMT_NB_NF
-					 | SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		return ret;
-
-	return 0;
-}
-
-static struct snd_soc_ops speyside_ops = {
-	.hw_params = speyside_hw_params,
-};
-
 static struct snd_soc_jack speyside_headset;
 
 /* Headset jack detection DAPM pins */
@@ -124,10 +99,6 @@ static struct snd_soc_jack_pin speyside_headset_pins[] = {
 	{
 		.pin = "Headset Mic",
 		.mask = SND_JACK_MICROPHONE,
-	},
-	{
-		.pin = "Headphone",
-		.mask = SND_JACK_HEADPHONE,
 	},
 };
 
@@ -155,6 +126,18 @@ static void speyside_set_polarity(struct snd_soc_codec *codec,
 	snd_soc_dapm_sync(&codec->dapm);
 }
 
+static int speyside_wm0010_init(struct snd_soc_pcm_runtime *rtd)
+{
+	struct snd_soc_dai *dai = rtd->codec_dai;
+	int ret;
+
+	ret = snd_soc_dai_set_sysclk(dai, 0, MCLK_AUDIO_RATE, 0);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 static int speyside_wm8996_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_dai *dai = rtd->codec_dai;
@@ -170,15 +153,10 @@ static int speyside_wm8996_init(struct snd_soc_pcm_runtime *rtd)
 		pr_err("Failed to request HP_SEL GPIO: %d\n", ret);
 	gpio_direction_output(WM8996_HPSEL_GPIO, speyside_jack_polarity);
 
-	ret = snd_soc_jack_new(codec, "Headset",
-			       SND_JACK_HEADSET | SND_JACK_BTN_0,
-			       &speyside_headset);
-	if (ret)
-		return ret;
-
-	ret = snd_soc_jack_add_pins(&speyside_headset,
-				    ARRAY_SIZE(speyside_headset_pins),
-				    speyside_headset_pins);
+	ret = snd_soc_card_jack_new(rtd->card, "Headset", SND_JACK_LINEOUT |
+				    SND_JACK_HEADSET | SND_JACK_BTN_0,
+				    &speyside_headset, speyside_headset_pins,
+				    ARRAY_SIZE(speyside_headset_pins));
 	if (ret)
 		return ret;
 
@@ -193,23 +171,44 @@ static int speyside_late_probe(struct snd_soc_card *card)
 	snd_soc_dapm_ignore_suspend(&card->dapm, "Headset Mic");
 	snd_soc_dapm_ignore_suspend(&card->dapm, "Main AMIC");
 	snd_soc_dapm_ignore_suspend(&card->dapm, "Main DMIC");
-	snd_soc_dapm_ignore_suspend(&card->dapm, "Speaker");
+	snd_soc_dapm_ignore_suspend(&card->dapm, "Main Speaker");
 	snd_soc_dapm_ignore_suspend(&card->dapm, "WM1250 Output");
 	snd_soc_dapm_ignore_suspend(&card->dapm, "WM1250 Input");
 
 	return 0;
 }
 
+static const struct snd_soc_pcm_stream dsp_codec_params = {
+	.formats = SNDRV_PCM_FMTBIT_S32_LE,
+	.rate_min = 48000,
+	.rate_max = 48000,
+	.channels_min = 2,
+	.channels_max = 2,
+};
+
 static struct snd_soc_dai_link speyside_dai[] = {
 	{
-		.name = "CPU",
-		.stream_name = "CPU",
+		.name = "CPU-DSP",
+		.stream_name = "CPU-DSP",
 		.cpu_dai_name = "samsung-i2s.0",
+		.codec_dai_name = "wm0010-sdi1",
+		.platform_name = "samsung-i2s.0",
+		.codec_name = "spi0.0",
+		.init = speyside_wm0010_init,
+		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
+				| SND_SOC_DAIFMT_CBM_CFM,
+	},
+	{
+		.name = "DSP-CODEC",
+		.stream_name = "DSP-CODEC",
+		.cpu_dai_name = "wm0010-sdi2",
 		.codec_dai_name = "wm8996-aif1",
-		.platform_name = "samsung-audio",
 		.codec_name = "wm8996.1-001a",
 		.init = speyside_wm8996_init,
-		.ops = &speyside_ops,
+		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
+				| SND_SOC_DAIFMT_CBM_CFM,
+		.params = &dsp_codec_params,
+		.ignore_suspend = 1,
 	},
 	{
 		.name = "Baseband",
@@ -217,18 +216,19 @@ static struct snd_soc_dai_link speyside_dai[] = {
 		.cpu_dai_name = "wm8996-aif2",
 		.codec_dai_name = "wm1250-ev1",
 		.codec_name = "wm1250-ev1.1-0027",
-		.ops = &speyside_ops,
+		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
+				| SND_SOC_DAIFMT_CBM_CFM,
 		.ignore_suspend = 1,
 	},
 };
 
-static int speyside_wm9081_init(struct snd_soc_dapm_context *dapm)
+static int speyside_wm9081_init(struct snd_soc_component *component)
 {
-	snd_soc_dapm_nc_pin(dapm, "LINEOUT");
+	struct snd_soc_codec *codec = snd_soc_component_to_codec(component);
 
 	/* At any time the WM9081 is active it will have this clock */
-	return snd_soc_codec_set_sysclk(dapm->codec, WM9081_SYSCLK_MCLK,
-					48000 * 256, 0);
+	return snd_soc_codec_set_sysclk(codec, WM9081_SYSCLK_MCLK, 0,
+					MCLK_AUDIO_RATE, 0);
 }
 
 static struct snd_soc_aux_dev speyside_aux_dev[] = {
@@ -252,6 +252,7 @@ static const struct snd_kcontrol_new controls[] = {
 	SOC_DAPM_PIN_SWITCH("Main AMIC"),
 	SOC_DAPM_PIN_SWITCH("WM1250 Input"),
 	SOC_DAPM_PIN_SWITCH("WM1250 Output"),
+	SOC_DAPM_PIN_SWITCH("Headphone"),
 };
 
 static struct snd_soc_dapm_widget widgets[] = {
@@ -293,6 +294,7 @@ static struct snd_soc_dapm_route audio_paths[] = {
 
 static struct snd_soc_card speyside = {
 	.name = "Speyside",
+	.owner = THIS_MODULE,
 	.dai_link = speyside_dai,
 	.num_links = ARRAY_SIZE(speyside_dai),
 	.aux_dev = speyside_aux_dev,
@@ -309,57 +311,35 @@ static struct snd_soc_card speyside = {
 	.num_dapm_widgets = ARRAY_SIZE(widgets),
 	.dapm_routes = audio_paths,
 	.num_dapm_routes = ARRAY_SIZE(audio_paths),
+	.fully_routed = true,
 
 	.late_probe = speyside_late_probe,
 };
 
-static __devinit int speyside_probe(struct platform_device *pdev)
+static int speyside_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &speyside;
 	int ret;
 
 	card->dev = &pdev->dev;
 
-	ret = snd_soc_register_card(card);
-	if (ret) {
+	ret = devm_snd_soc_register_card(&pdev->dev, card);
+	if (ret)
 		dev_err(&pdev->dev, "snd_soc_register_card() failed: %d\n",
 			ret);
-		return ret;
-	}
 
-	return 0;
-}
-
-static int __devexit speyside_remove(struct platform_device *pdev)
-{
-	struct snd_soc_card *card = platform_get_drvdata(pdev);
-
-	snd_soc_unregister_card(card);
-
-	return 0;
+	return ret;
 }
 
 static struct platform_driver speyside_driver = {
 	.driver = {
 		.name = "speyside",
-		.owner = THIS_MODULE,
 		.pm = &snd_soc_pm_ops,
 	},
 	.probe = speyside_probe,
-	.remove = __devexit_p(speyside_remove),
 };
 
-static int __init speyside_audio_init(void)
-{
-	return platform_driver_register(&speyside_driver);
-}
-module_init(speyside_audio_init);
-
-static void __exit speyside_audio_exit(void)
-{
-	platform_driver_unregister(&speyside_driver);
-}
-module_exit(speyside_audio_exit);
+module_platform_driver(speyside_driver);
 
 MODULE_DESCRIPTION("Speyside audio support");
 MODULE_AUTHOR("Mark Brown <broonie@opensource.wolfsonmicro.com>");

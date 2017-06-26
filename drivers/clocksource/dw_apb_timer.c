@@ -117,7 +117,8 @@ static void apbt_set_mode(enum clock_event_mode mode,
 	unsigned long period;
 	struct dw_apb_clock_event_device *dw_ced = ced_to_dw_apb_ced(evt);
 
-	pr_debug("%s CPU %d mode=%d\n", __func__, first_cpu(*evt->cpumask),
+	pr_debug("%s CPU %d mode=%d\n", __func__,
+		 cpumask_first(evt->cpumask),
 		 mode);
 
 	switch (mode) {
@@ -243,8 +244,7 @@ dw_apb_clockevent_init(int cpu, const char *name, unsigned rating,
 	dw_ced->irqaction.dev_id	= &dw_ced->ced;
 	dw_ced->irqaction.irq		= irq;
 	dw_ced->irqaction.flags		= IRQF_TIMER | IRQF_IRQPOLL |
-					  IRQF_NOBALANCING |
-					  IRQF_DISABLED;
+					  IRQF_NOBALANCING;
 
 	dw_ced->eoi = apbt_eoi;
 	err = setup_irq(irq, &dw_ced->irqaction);
@@ -348,7 +348,7 @@ static void apbt_restart_clocksource(struct clocksource *cs)
  * dw_apb_clocksource_register() as the next step.
  */
 struct dw_apb_clocksource *
-dw_apb_clocksource_init(unsigned rating, char *name, void __iomem *base,
+dw_apb_clocksource_init(unsigned rating, const char *name, void __iomem *base,
 			unsigned long freq)
 {
 	struct dw_apb_clocksource *dw_cs = kzalloc(sizeof(*dw_cs), GFP_KERNEL);
@@ -386,16 +386,4 @@ void dw_apb_clocksource_register(struct dw_apb_clocksource *dw_cs)
 cycle_t dw_apb_clocksource_read(struct dw_apb_clocksource *dw_cs)
 {
 	return (cycle_t)~apbt_readl(&dw_cs->timer, APBTMR_N_CURRENT_VALUE);
-}
-
-/**
- * dw_apb_clocksource_unregister() - unregister and free a clocksource.
- *
- * @dw_cs:	The clocksource to unregister/free.
- */
-void dw_apb_clocksource_unregister(struct dw_apb_clocksource *dw_cs)
-{
-	clocksource_unregister(&dw_cs->cs);
-
-	kfree(dw_cs);
 }

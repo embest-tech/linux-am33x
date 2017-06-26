@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006 Freescale Semicondutor, Inc. All rights reserved.
+ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
  *
  * Authors: 	Shlomi Gridish <gridish@freescale.com>
  * 		Li Yang <leoli@freescale.com>
@@ -13,13 +13,12 @@
  * option) any later version.
  */
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/stddef.h>
 #include <linux/interrupt.h>
 #include <linux/err.h>
-#include <linux/module.h>
+#include <linux/export.h>
 
 #include <asm/io.h>
 #include <asm/immap_qe.h>
@@ -43,11 +42,6 @@ u32 ucc_slow_get_qe_cr_subblock(int uccs_num)
 	}
 }
 EXPORT_SYMBOL(ucc_slow_get_qe_cr_subblock);
-
-void ucc_slow_poll_transmitter_now(struct ucc_slow_private * uccs)
-{
-	out_be16(&uccs->us_regs->utodr, UCC_SLOW_TOD);
-}
 
 void ucc_slow_graceful_stop_tx(struct ucc_slow_private * uccs)
 {

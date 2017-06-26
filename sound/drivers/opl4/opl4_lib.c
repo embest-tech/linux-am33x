@@ -22,7 +22,8 @@
 #include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <asm/io.h>
+#include <linux/module.h>
+#include <linux/io.h>
 
 MODULE_AUTHOR("Clemens Ladisch <clemens@ladisch.de>");
 MODULE_DESCRIPTION("OPL4 driver");

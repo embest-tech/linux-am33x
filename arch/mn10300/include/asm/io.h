@@ -14,6 +14,7 @@
 #include <asm/page.h> /* I/O is all done through memory accesses */
 #include <asm/cpu-regs.h>
 #include <asm/cacheflush.h>
+#include <asm-generic/pci_iomap.h>
 
 #define mmiowb() do {} while (0)
 
@@ -65,6 +66,10 @@ static inline void writel(u32 b, volatile void __iomem *addr)
 #define __raw_writeb writeb
 #define __raw_writew writew
 #define __raw_writel writel
+
+#define writeb_relaxed writeb
+#define writew_relaxed writew
+#define writel_relaxed writel
 
 /*****************************************************************************/
 /*
@@ -192,6 +197,11 @@ static inline void outsl(unsigned long addr, const void *buffer, int count)
 #define iowrite16(v, addr)	writew((v), (addr))
 #define iowrite32(v, addr)	writel((v), (addr))
 
+#define ioread16be(addr)	be16_to_cpu(readw(addr))
+#define ioread32be(addr)	be32_to_cpu(readl(addr))
+#define iowrite16be(v, addr)	writew(cpu_to_be16(v), (addr))
+#define iowrite32be(v, addr)	writel(cpu_to_be32(v), (addr))
+
 #define ioread8_rep(p, dst, count) \
 	insb((unsigned long) (p), (dst), (count))
 #define ioread16_rep(p, dst, count) \
@@ -229,7 +239,6 @@ static inline void outsl(unsigned long addr, const void *buffer, int count)
 
 /* Create a virtual mapping cookie for a PCI BAR (memory or IO) */
 struct pci_dev;
-extern void __iomem *pci_iomap(struct pci_dev *dev, int bar, unsigned long max);
 static inline void pci_iounmap(struct pci_dev *dev, void __iomem *p)
 {
 }
@@ -251,15 +260,15 @@ static inline void *phys_to_virt(unsigned long address)
 /*
  * Change "struct page" to physical address.
  */
-static inline void *__ioremap(unsigned long offset, unsigned long size,
-			      unsigned long flags)
+static inline void __iomem *__ioremap(unsigned long offset, unsigned long size,
+				      unsigned long flags)
 {
-	return (void *) offset;
+	return (void __iomem *) offset;
 }
 
-static inline void *ioremap(unsigned long offset, unsigned long size)
+static inline void __iomem *ioremap(unsigned long offset, unsigned long size)
 {
-	return (void *) offset;
+	return (void __iomem *)(offset & ~0x20000000);
 }
 
 /*
@@ -267,14 +276,14 @@ static inline void *ioremap(unsigned long offset, unsigned long size)
  * area.  it's useful if some control registers are in such an area and write
  * combining or read caching is not desirable:
  */
-static inline void *ioremap_nocache(unsigned long offset, unsigned long size)
+static inline void __iomem *ioremap_nocache(unsigned long offset, unsigned long size)
 {
-	return (void *) (offset | 0x20000000);
+	return (void __iomem *) (offset | 0x20000000);
 }
 
 #define ioremap_wc ioremap_nocache
 
-static inline void iounmap(void *addr)
+static inline void iounmap(void __iomem *addr)
 {
 }
 

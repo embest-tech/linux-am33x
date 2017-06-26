@@ -47,6 +47,7 @@
 #define SC_DEBUG_NAME		"sock_containers"
 #define NST_DEBUG_NAME		"send_tracking"
 #define STATS_DEBUG_NAME	"stats"
+#define NODES_DEBUG_NAME	"connected_nodes"
 
 #define SHOW_SOCK_CONTAINERS	0
 #define SHOW_SOCK_STATS		1
@@ -55,6 +56,7 @@ static struct dentry *o2net_dentry;
 static struct dentry *sc_dentry;
 static struct dentry *nst_dentry;
 static struct dentry *stats_dentry;
+static struct dentry *nodes_dentry;
 
 static DEFINE_SPINLOCK(o2net_debug_lock);
 
@@ -183,29 +185,13 @@ static const struct seq_operations nst_seq_ops = {
 static int nst_fop_open(struct inode *inode, struct file *file)
 {
 	struct o2net_send_tracking *dummy_nst;
-	struct seq_file *seq;
-	int ret;
 
-	dummy_nst = kmalloc(sizeof(struct o2net_send_tracking), GFP_KERNEL);
-	if (dummy_nst == NULL) {
-		ret = -ENOMEM;
-		goto out;
-	}
-	dummy_nst->st_task = NULL;
-
-	ret = seq_open(file, &nst_seq_ops);
-	if (ret)
-		goto out;
-
-	seq = file->private_data;
-	seq->private = dummy_nst;
+	dummy_nst = __seq_open_private(file, &nst_seq_ops, sizeof(*dummy_nst));
+	if (!dummy_nst)
+		return -ENOMEM;
 	o2net_debug_add_nst(dummy_nst);
 
-	dummy_nst = NULL;
-
-out:
-	kfree(dummy_nst);
-	return ret;
+	return 0;
 }
 
 static int nst_fop_release(struct inode *inode, struct file *file)
@@ -410,33 +396,27 @@ static const struct seq_operations sc_seq_ops = {
 	.show = sc_seq_show,
 };
 
-static int sc_common_open(struct file *file, struct o2net_sock_debug *sd)
+static int sc_common_open(struct file *file, int ctxt)
 {
+	struct o2net_sock_debug *sd;
 	struct o2net_sock_container *dummy_sc;
-	struct seq_file *seq;
-	int ret;
 
-	dummy_sc = kmalloc(sizeof(struct o2net_sock_container), GFP_KERNEL);
-	if (dummy_sc == NULL) {
-		ret = -ENOMEM;
-		goto out;
+	dummy_sc = kzalloc(sizeof(*dummy_sc), GFP_KERNEL);
+	if (!dummy_sc)
+		return -ENOMEM;
+
+	sd = __seq_open_private(file, &sc_seq_ops, sizeof(*sd));
+	if (!sd) {
+		kfree(dummy_sc);
+		return -ENOMEM;
 	}
-	dummy_sc->sc_page = NULL;
 
-	ret = seq_open(file, &sc_seq_ops);
-	if (ret)
-		goto out;
-
-	seq = file->private_data;
-	seq->private = sd;
+	sd->dbg_ctxt = ctxt;
 	sd->dbg_sock = dummy_sc;
+
 	o2net_debug_add_sc(dummy_sc);
 
-	dummy_sc = NULL;
-
-out:
-	kfree(dummy_sc);
-	return ret;
+	return 0;
 }
 
 static int sc_fop_release(struct inode *inode, struct file *file)
@@ -451,16 +431,7 @@ static int sc_fop_release(struct inode *inode, struct file *file)
 
 static int stats_fop_open(struct inode *inode, struct file *file)
 {
-	struct o2net_sock_debug *sd;
-
-	sd = kmalloc(sizeof(struct o2net_sock_debug), GFP_KERNEL);
-	if (sd == NULL)
-		return -ENOMEM;
-
-	sd->dbg_ctxt = SHOW_SOCK_STATS;
-	sd->dbg_sock = NULL;
-
-	return sc_common_open(file, sd);
+	return sc_common_open(file, SHOW_SOCK_STATS);
 }
 
 static const struct file_operations stats_seq_fops = {
@@ -472,16 +443,7 @@ static const struct file_operations stats_seq_fops = {
 
 static int sc_fop_open(struct inode *inode, struct file *file)
 {
-	struct o2net_sock_debug *sd;
-
-	sd = kmalloc(sizeof(struct o2net_sock_debug), GFP_KERNEL);
-	if (sd == NULL)
-		return -ENOMEM;
-
-	sd->dbg_ctxt = SHOW_SOCK_CONTAINERS;
-	sd->dbg_sock = NULL;
-
-	return sc_common_open(file, sd);
+	return sc_common_open(file, SHOW_SOCK_CONTAINERS);
 }
 
 static const struct file_operations sc_seq_fops = {
@@ -491,53 +453,87 @@ static const struct file_operations sc_seq_fops = {
 	.release = sc_fop_release,
 };
 
-int o2net_debugfs_init(void)
+static int o2net_fill_bitmap(char *buf, int len)
 {
-	o2net_dentry = debugfs_create_dir(O2NET_DEBUG_DIR, NULL);
-	if (!o2net_dentry) {
-		mlog_errno(-ENOMEM);
-		goto bail;
-	}
+	unsigned long map[BITS_TO_LONGS(O2NM_MAX_NODES)];
+	int i = -1, out = 0;
 
-	nst_dentry = debugfs_create_file(NST_DEBUG_NAME, S_IFREG|S_IRUSR,
-					 o2net_dentry, NULL,
-					 &nst_seq_fops);
-	if (!nst_dentry) {
-		mlog_errno(-ENOMEM);
-		goto bail;
-	}
+	o2net_fill_node_map(map, sizeof(map));
 
-	sc_dentry = debugfs_create_file(SC_DEBUG_NAME, S_IFREG|S_IRUSR,
-					o2net_dentry, NULL,
-					&sc_seq_fops);
-	if (!sc_dentry) {
-		mlog_errno(-ENOMEM);
-		goto bail;
-	}
+	while ((i = find_next_bit(map, O2NM_MAX_NODES, i + 1)) < O2NM_MAX_NODES)
+		out += snprintf(buf + out, PAGE_SIZE - out, "%d ", i);
+	out += snprintf(buf + out, PAGE_SIZE - out, "\n");
 
-	stats_dentry = debugfs_create_file(STATS_DEBUG_NAME, S_IFREG|S_IRUSR,
-					   o2net_dentry, NULL,
-					   &stats_seq_fops);
-	if (!stats_dentry) {
-		mlog_errno(-ENOMEM);
-		goto bail;
-	}
+	return out;
+}
+
+static int nodes_fop_open(struct inode *inode, struct file *file)
+{
+	char *buf;
+
+	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	i_size_write(inode, o2net_fill_bitmap(buf, PAGE_SIZE));
+
+	file->private_data = buf;
 
 	return 0;
-bail:
-	debugfs_remove(stats_dentry);
-	debugfs_remove(sc_dentry);
-	debugfs_remove(nst_dentry);
-	debugfs_remove(o2net_dentry);
-	return -ENOMEM;
 }
+
+static int o2net_debug_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+
+static ssize_t o2net_debug_read(struct file *file, char __user *buf,
+				size_t nbytes, loff_t *ppos)
+{
+	return simple_read_from_buffer(buf, nbytes, ppos, file->private_data,
+				       i_size_read(file->f_mapping->host));
+}
+
+static const struct file_operations nodes_fops = {
+	.open		= nodes_fop_open,
+	.release	= o2net_debug_release,
+	.read		= o2net_debug_read,
+	.llseek		= generic_file_llseek,
+};
 
 void o2net_debugfs_exit(void)
 {
+	debugfs_remove(nodes_dentry);
 	debugfs_remove(stats_dentry);
 	debugfs_remove(sc_dentry);
 	debugfs_remove(nst_dentry);
 	debugfs_remove(o2net_dentry);
+}
+
+int o2net_debugfs_init(void)
+{
+	umode_t mode = S_IFREG|S_IRUSR;
+
+	o2net_dentry = debugfs_create_dir(O2NET_DEBUG_DIR, NULL);
+	if (o2net_dentry)
+		nst_dentry = debugfs_create_file(NST_DEBUG_NAME, mode,
+					o2net_dentry, NULL, &nst_seq_fops);
+	if (nst_dentry)
+		sc_dentry = debugfs_create_file(SC_DEBUG_NAME, mode,
+					o2net_dentry, NULL, &sc_seq_fops);
+	if (sc_dentry)
+		stats_dentry = debugfs_create_file(STATS_DEBUG_NAME, mode,
+					o2net_dentry, NULL, &stats_seq_fops);
+	if (stats_dentry)
+		nodes_dentry = debugfs_create_file(NODES_DEBUG_NAME, mode,
+					o2net_dentry, NULL, &nodes_fops);
+	if (nodes_dentry)
+		return 0;
+
+	o2net_debugfs_exit();
+	mlog_errno(-ENOMEM);
+	return -ENOMEM;
 }
 
 #endif	/* CONFIG_DEBUG_FS */

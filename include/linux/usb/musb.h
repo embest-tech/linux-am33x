@@ -62,7 +62,6 @@ struct musb_hdrc_eps_bits {
 struct musb_hdrc_config {
 	struct musb_fifo_cfg	*fifo_cfg;	/* board fifo configuration */
 	unsigned		fifo_cfg_size;	/* size of the fifo configuration */
-	unsigned short		fifo_mode;	/* fifo mode to be selected */
 
 	/* MUSB configuration-specific details */
 	unsigned	multipoint:1;	/* multipoint device */
@@ -76,6 +75,9 @@ struct musb_hdrc_config {
 	unsigned	high_iso_rx:1;	/* Rx ep required for HD iso */
 	unsigned	dma:1 __deprecated; /* supports DMA */
 	unsigned	vendor_req:1 __deprecated; /* vendor registers required */
+
+	/* need to explicitly de-assert the port reset after resume? */
+	unsigned	host_port_deassert_reset_at_resume:1;
 
 	u8		num_eps;	/* number of endpoints _with_ ep0 */
 	u8		dma_channels __deprecated; /* number of dma channels */

@@ -102,7 +102,6 @@
 #include <linux/if.h>
 #include <linux/bitops.h>
 
-#include <asm/system.h>
 #include <asm/termios.h>
 #include <asm/uaccess.h>
 
@@ -417,7 +416,7 @@ static void n_hdlc_send_frames(struct n_hdlc *n_hdlc, struct tty_struct *tty)
 				__FILE__,__LINE__,tbuf,tbuf->count);
 			
 		/* Send the next block of data to device */
-		tty->flags |= (1 << TTY_DO_WRITE_WAKEUP);
+		set_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 		actual = tty->ops->write(tty, tbuf->buf, tbuf->count);
 
 		/* rollback was possible and has been done */
@@ -459,7 +458,7 @@ static void n_hdlc_send_frames(struct n_hdlc *n_hdlc, struct tty_struct *tty)
 	}
 	
 	if (!tbuf)
-		tty->flags  &= ~(1 << TTY_DO_WRITE_WAKEUP);
+		clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 	
 	/* Clear the re-entry flag */
 	spin_lock_irqsave(&n_hdlc->tx_buf_list.spinlock, flags);
@@ -491,7 +490,7 @@ static void n_hdlc_tty_wakeup(struct tty_struct *tty)
 		return;
 
 	if (tty != n_hdlc->tty) {
-		tty->flags &= ~(1 << TTY_DO_WRITE_WAKEUP);
+		clear_bit(TTY_DO_WRITE_WAKEUP, &tty->flags);
 		return;
 	}
 
@@ -601,7 +600,7 @@ static ssize_t n_hdlc_tty_read(struct tty_struct *tty, struct file *file,
 	add_wait_queue(&tty->read_wait, &wait);
 
 	for (;;) {
-		if (test_bit(TTY_OTHER_CLOSED, &tty->flags)) {
+		if (test_bit(TTY_OTHER_DONE, &tty->flags)) {
 			ret = -EIO;
 			break;
 		}
@@ -829,7 +828,7 @@ static unsigned int n_hdlc_tty_poll(struct tty_struct *tty, struct file *filp,
 		/* set bits for operations that won't block */
 		if (n_hdlc->rx_buf_list.head)
 			mask |= POLLIN | POLLRDNORM;	/* readable */
-		if (test_bit(TTY_OTHER_CLOSED, &tty->flags))
+		if (test_bit(TTY_OTHER_DONE, &tty->flags))
 			mask |= POLLHUP;
 		if (tty_hung_up_p(filp))
 			mask |= POLLHUP;
@@ -849,12 +848,10 @@ static struct n_hdlc *n_hdlc_alloc(void)
 {
 	struct n_hdlc_buf *buf;
 	int i;
-	struct n_hdlc *n_hdlc = kmalloc(sizeof(*n_hdlc), GFP_KERNEL);
+	struct n_hdlc *n_hdlc = kzalloc(sizeof(*n_hdlc), GFP_KERNEL);
 
 	if (!n_hdlc)
 		return NULL;
-
-	memset(n_hdlc, 0, sizeof(*n_hdlc));
 
 	n_hdlc_buf_list_init(&n_hdlc->rx_free_buf_list);
 	n_hdlc_buf_list_init(&n_hdlc->tx_free_buf_list);
@@ -953,8 +950,6 @@ static char hdlc_register_ok[] __initdata =
 	KERN_INFO "N_HDLC line discipline registered.\n";
 static char hdlc_register_fail[] __initdata =
 	KERN_ERR "error registering line discipline: %d\n";
-static char hdlc_init_fail[] __initdata =
-	KERN_INFO "N_HDLC: init failure %d\n";
 
 static int __init n_hdlc_init(void)
 {
@@ -974,8 +969,6 @@ static int __init n_hdlc_init(void)
 	else
 		printk(hdlc_register_fail, status);
 
-	if (status)
-		printk(hdlc_init_fail, status);
 	return status;
 	
 }	/* end of init_module() */

@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2009 - 2011 Intel Corporation. All rights reserved.
+ * Copyright(c) 2009 - 2014 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -28,7 +28,7 @@
 
 /* sparse doesn't like tracepoint macros */
 #ifndef __CHECKER__
-#include "iwl-dev.h"
+#include "iwl-trans.h"
 
 #define CREATE_TRACE_POINTS
 #include "iwl-devtrace.h"
@@ -36,8 +36,6 @@
 EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_iowrite8);
 EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_ioread32);
 EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_iowrite32);
-EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_rx);
-EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_tx);
 EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_ucode_event);
 EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_ucode_error);
 EXPORT_TRACEPOINT_SYMBOL(iwlwifi_dev_ucode_cont_event);

@@ -9,7 +9,6 @@
  * more details.
  */
 
-//#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -18,7 +17,7 @@
 #include <linux/netdevice.h>
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
-#include <asm/string.h>
+#include <linux/string.h>
 
 #include "ieee80211.h"
 
@@ -62,7 +61,7 @@ struct ieee80211_tkip_data {
 	u8 rx_hdr[16], tx_hdr[16];
 };
 
-static void * ieee80211_tkip_init(int key_idx)
+static void *ieee80211_tkip_init(int key_idx)
 {
 	struct ieee80211_tkip_data *priv;
 
@@ -499,8 +498,8 @@ static int ieee80211_tkip_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	return keyidx;
 }
 
-static int michael_mic(struct crypto_hash *tfm_michael, u8 * key, u8 * hdr,
-		       u8 * data, size_t data_len, u8 * mic)
+static int michael_mic(struct crypto_hash *tfm_michael, u8 *key, u8 *hdr,
+		       u8 *data, size_t data_len, u8 *mic)
 {
 	struct hash_desc desc;
 	struct scatterlist sg[2];
@@ -718,7 +717,7 @@ static int ieee80211_tkip_get_key(void *key, int len, u8 *seq, void *priv)
 }
 
 
-static char * ieee80211_tkip_print_stats(char *p, void *priv)
+static char *ieee80211_tkip_print_stats(char *p, void *priv)
 {
 	struct ieee80211_tkip_data *tkip = priv;
 	p += sprintf(p, "key[%d] alg=TKIP key_set=%d "
@@ -773,6 +772,6 @@ void __exit ieee80211_crypto_tkip_exit(void)
 
 void ieee80211_tkip_null(void)
 {
-//    printk("============>%s()\n", __FUNCTION__);
+//    printk("============>%s()\n", __func__);
 	return;
 }

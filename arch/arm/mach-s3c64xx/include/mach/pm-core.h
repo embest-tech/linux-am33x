@@ -12,6 +12,11 @@
  * published by the Free Software Foundation.
  */
 
+#ifndef __MACH_S3C64XX_PM_CORE_H
+#define __MACH_S3C64XX_PM_CORE_H __FILE__
+
+#include <linux/serial_s3c.h>
+
 #include <mach/regs-gpio.h>
 
 static inline void s3c_pm_debug_init_uart(void)
@@ -104,7 +109,7 @@ static inline void s3c_pm_restored_gpios(void)
 	__raw_writel(0, S3C64XX_SLPEN);
 }
 
-static inline void s3c_pm_saved_gpios(void)
+static inline void samsung_pm_saved_gpios(void)
 {
 	/* turn on the sleep mode and keep it there, as it seems that during
 	 * suspend the xCON registers get re-set and thus you can end up with
@@ -113,3 +118,4 @@ static inline void s3c_pm_saved_gpios(void)
 
 	__raw_writel(S3C64XX_SLPEN_USE_xSLP, S3C64XX_SLPEN);
 }
+#endif /* __MACH_S3C64XX_PM_CORE_H */

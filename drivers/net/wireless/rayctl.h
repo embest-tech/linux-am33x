@@ -1,4 +1,5 @@
-#ifndef RAYLINK_H
+#ifndef _RAYCTL_H_
+#define _RAYCTL_H_
 
 typedef unsigned char UCHAR;
 
@@ -566,9 +567,9 @@ struct phy_header {
     UCHAR hdr_3;
     UCHAR hdr_4;
 };
-struct rx_msg {
+struct ray_rx_msg {
     struct mac_header mac;
-    UCHAR  var[1];
+    UCHAR  var[0];
 };
 
 struct tx_msg {
@@ -729,4 +730,4 @@ typedef struct snaphdr_t
 #define RAY_IPX_TYPE  0x8137
 #define APPLEARP_TYPE 0x80f3
 /*****************************************************************************/
-#endif /* #ifndef RAYLINK_H */
+#endif /* _RAYCTL_H_ */

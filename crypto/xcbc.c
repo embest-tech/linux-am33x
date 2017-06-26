@@ -22,6 +22,7 @@
 #include <crypto/internal/hash.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 
 static u_int32_t ks[12] = {0x01010101, 0x01010101, 0x01010101, 0x01010101,
 			   0x02020202, 0x02020202, 0x02020202, 0x02020202,
@@ -285,3 +286,4 @@ module_exit(crypto_xcbc_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("XCBC keyed hash algorithm");
+MODULE_ALIAS_CRYPTO("xcbc");

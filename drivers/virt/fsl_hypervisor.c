@@ -34,6 +34,7 @@
 #include <linux/slab.h>
 #include <linux/poll.h>
 #include <linux/of.h>
+#include <linux/of_irq.h>
 #include <linux/reboot.h>
 #include <linux/uaccess.h>
 #include <linux/notifier.h>
@@ -706,6 +707,7 @@ static const struct file_operations fsl_hv_fops = {
 	.poll = fsl_hv_poll,
 	.read = fsl_hv_read,
 	.unlocked_ioctl = fsl_hv_ioctl,
+	.compat_ioctl = fsl_hv_ioctl,
 };
 
 static struct miscdevice fsl_hv_misc_dev = {
@@ -794,9 +796,6 @@ static int has_fsl_hypervisor(void)
 {
 	struct device_node *node;
 	int ret;
-
-	if (!(mfmsr() & MSR_GS))
-		return 0;
 
 	node = of_find_node_by_path("/hypervisor");
 	if (!node)

@@ -31,7 +31,6 @@
 #include <linux/kthread.h>
 #include <linux/delay.h>
 
-#include <asm/system.h>
 
 /*
  * The apm_bios device is one of the misc char devices.
@@ -40,10 +39,7 @@
 #define APM_MINOR_DEV	134
 
 /*
- * See Documentation/Config.help for the configuration options.
- *
- * Various options can be changed at boot time as follows:
- * (We allow underscores for compatibility with the modules code)
+ * One option can be changed at boot time as follows:
  *	apm=on/off			enable/disable APM
  */
 
@@ -300,17 +296,13 @@ apm_ioctl(struct file *filp, u_int cmd, u_long arg)
 			/*
 			 * Wait for the suspend/resume to complete.  If there
 			 * are pending acknowledges, we wait here for them.
+			 * wait_event_freezable() is interruptible and pending
+			 * signal can cause busy looping.  We aren't doing
+			 * anything critical, chill a bit on each iteration.
 			 */
-			freezer_do_not_count();
-
-			wait_event(apm_suspend_waitqueue,
-				   as->suspend_state == SUSPEND_DONE);
-
-			/*
-			 * Since we are waiting until the suspend is done, the
-			 * try_to_freeze() in freezer_count() will not trigger
-			 */
-			freezer_count();
+			while (wait_event_freezable(apm_suspend_waitqueue,
+					as->suspend_state != SUSPEND_ACKED))
+				msleep(10);
 			break;
 		case SUSPEND_ACKTO:
 			as->suspend_result = -ETIMEDOUT;
@@ -539,6 +531,7 @@ static int apm_suspend_notifier(struct notifier_block *nb,
 {
 	struct apm_user *as;
 	int err;
+	unsigned long apm_event;
 
 	/* short-cut emergency suspends */
 	if (atomic_read(&userspace_notification_inhibit))
@@ -546,6 +539,9 @@ static int apm_suspend_notifier(struct notifier_block *nb,
 
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
+	case PM_HIBERNATION_PREPARE:
+		apm_event = (event == PM_SUSPEND_PREPARE) ?
+			APM_USER_SUSPEND : APM_USER_HIBERNATION;
 		/*
 		 * Queue an event to all "writer" users that we want
 		 * to suspend and need their ack.
@@ -558,7 +554,7 @@ static int apm_suspend_notifier(struct notifier_block *nb,
 			    as->writer && as->suser) {
 				as->suspend_state = SUSPEND_PENDING;
 				atomic_inc(&suspend_acks_pending);
-				queue_add_event(&as->queue, APM_USER_SUSPEND);
+				queue_add_event(&as->queue, apm_event);
 			}
 		}
 
@@ -609,11 +605,14 @@ static int apm_suspend_notifier(struct notifier_block *nb,
 		return notifier_from_errno(err);
 
 	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
+		apm_event = (event == PM_POST_SUSPEND) ?
+			APM_NORMAL_RESUME : APM_HIBERNATION_RESUME;
 		/*
 		 * Anyone on the APM queues will think we're still suspended.
 		 * Send a message so everyone knows we're now awake again.
 		 */
-		queue_event(APM_NORMAL_RESUME);
+		queue_event(apm_event);
 
 		/*
 		 * Finally, wake up anyone who is sleeping on the suspend.

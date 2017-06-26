@@ -48,16 +48,19 @@ ebt_ip6_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	if (info->bitmask & EBT_IP6_TCLASS &&
 	   FWINV(info->tclass != ipv6_get_dsfield(ih6), EBT_IP6_TCLASS))
 		return false;
-	if (FWINV(ipv6_masked_addr_cmp(&ih6->saddr, &info->smsk,
-				       &info->saddr), EBT_IP6_SOURCE) ||
+	if ((info->bitmask & EBT_IP6_SOURCE &&
+	    FWINV(ipv6_masked_addr_cmp(&ih6->saddr, &info->smsk,
+				       &info->saddr), EBT_IP6_SOURCE)) ||
+	    (info->bitmask & EBT_IP6_DEST &&
 	    FWINV(ipv6_masked_addr_cmp(&ih6->daddr, &info->dmsk,
-				       &info->daddr), EBT_IP6_DEST))
+				       &info->daddr), EBT_IP6_DEST)))
 		return false;
 	if (info->bitmask & EBT_IP6_PROTO) {
 		uint8_t nexthdr = ih6->nexthdr;
+		__be16 frag_off;
 		int offset_ph;
 
-		offset_ph = ipv6_skip_exthdr(skb, sizeof(_ip6h), &nexthdr);
+		offset_ph = ipv6_skip_exthdr(skb, sizeof(_ip6h), &nexthdr, &frag_off);
 		if (offset_ph == -1)
 			return false;
 		if (FWINV(info->protocol != nexthdr, EBT_IP6_PROTO))

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006 Freescale Semicondutor, Inc. All rights reserved.
+ * Copyright (C) 2006 Freescale Semiconductor, Inc. All rights reserved.
  *
  * Authors: 	Shlomi Gridish <gridish@freescale.com>
  * 		Li Yang <leoli@freescale.com>
@@ -13,13 +13,12 @@
  * option) any later version.
  */
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/stddef.h>
 #include <linux/interrupt.h>
 #include <linux/err.h>
-#include <linux/module.h>
+#include <linux/export.h>
 
 #include <asm/io.h>
 #include <asm/immap_qe.h>

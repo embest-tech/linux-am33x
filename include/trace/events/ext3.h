@@ -24,8 +24,8 @@ TRACE_EVENT(ext3_free_inode,
 		__entry->dev	= inode->i_sb->s_dev;
 		__entry->ino	= inode->i_ino;
 		__entry->mode	= inode->i_mode;
-		__entry->uid	= inode->i_uid;
-		__entry->gid	= inode->i_gid;
+		__entry->uid	= i_uid_read(inode);
+		__entry->gid	= i_gid_read(inode);
 		__entry->blocks	= inode->i_blocks;
 	),
 
@@ -144,7 +144,7 @@ TRACE_EVENT(ext3_mark_inode_dirty,
 		__entry->ip	= IP;
 	),
 
-	TP_printk("dev %d,%d ino %lu caller %pF",
+	TP_printk("dev %d,%d ino %lu caller %pS",
 		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  (unsigned long) __entry->ino, (void *)__entry->ip)
 );
@@ -290,13 +290,14 @@ DEFINE_EVENT(ext3__page_op, ext3_releasepage,
 );
 
 TRACE_EVENT(ext3_invalidatepage,
-	TP_PROTO(struct page *page, unsigned long offset),
+	TP_PROTO(struct page *page, unsigned int offset, unsigned int length),
 
-	TP_ARGS(page, offset),
+	TP_ARGS(page, offset, length),
 
 	TP_STRUCT__entry(
 		__field(	pgoff_t, index			)
-		__field(	unsigned long, offset		)
+		__field(	unsigned int, offset		)
+		__field(	unsigned int, length		)
 		__field(	ino_t,	ino			)
 		__field(	dev_t,	dev			)
 
@@ -305,14 +306,15 @@ TRACE_EVENT(ext3_invalidatepage,
 	TP_fast_assign(
 		__entry->index	= page->index;
 		__entry->offset	= offset;
+		__entry->length	= length;
 		__entry->ino	= page->mapping->host->i_ino;
 		__entry->dev	= page->mapping->host->i_sb->s_dev;
 	),
 
-	TP_printk("dev %d,%d ino %lu page_index %lu offset %lu",
+	TP_printk("dev %d,%d ino %lu page_index %lu offset %u length %u",
 		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  (unsigned long) __entry->ino,
-		  __entry->index, __entry->offset)
+		  __entry->index, __entry->offset, __entry->length)
 );
 
 TRACE_EVENT(ext3_discard_blocks,
@@ -437,10 +439,10 @@ TRACE_EVENT(ext3_sync_file_enter,
 	TP_fast_assign(
 		struct dentry *dentry = file->f_path.dentry;
 
-		__entry->dev		= dentry->d_inode->i_sb->s_dev;
-		__entry->ino		= dentry->d_inode->i_ino;
+		__entry->dev		= d_inode(dentry)->i_sb->s_dev;
+		__entry->ino		= d_inode(dentry)->i_ino;
 		__entry->datasync	= datasync;
-		__entry->parent		= dentry->d_parent->d_inode->i_ino;
+		__entry->parent		= d_inode(dentry->d_parent)->i_ino;
 	),
 
 	TP_printk("dev %d,%d ino %lu parent %ld datasync %d ",
@@ -708,9 +710,9 @@ TRACE_EVENT(ext3_unlink_enter,
 
 	TP_fast_assign(
 		__entry->parent		= parent->i_ino;
-		__entry->ino		= dentry->d_inode->i_ino;
-		__entry->size		= dentry->d_inode->i_size;
-		__entry->dev		= dentry->d_inode->i_sb->s_dev;
+		__entry->ino		= d_inode(dentry)->i_ino;
+		__entry->size		= d_inode(dentry)->i_size;
+		__entry->dev		= d_inode(dentry)->i_sb->s_dev;
 	),
 
 	TP_printk("dev %d,%d ino %lu size %lld parent %ld",
@@ -732,8 +734,8 @@ TRACE_EVENT(ext3_unlink_exit,
 	),
 
 	TP_fast_assign(
-		__entry->ino		= dentry->d_inode->i_ino;
-		__entry->dev		= dentry->d_inode->i_sb->s_dev;
+		__entry->ino		= d_inode(dentry)->i_ino;
+		__entry->dev		= d_inode(dentry)->i_sb->s_dev;
 		__entry->ret		= ret;
 	),
 

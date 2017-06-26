@@ -1,0 +1,53 @@
+/*
+ * Copyright (C) 2015 Embest Technology Co., Ltd., - http://www.embest-tech.com
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This dts is for embest own product:
+ * SOM-PH8700 + BB-SPH1800
+ */
+/*/dts-v1/;*/
+
+#include "embest-SOM_PH8700-BB_SPH1800.dts"
+
+&lcd0 {
+	enable-gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>; 
+	display-timings {
+		800x480p62 {
+			clock-frequency = <36000000>;
+			hactive = <800>;
+			vactive = <480>;
+			hfront-porch = <1>;
+			hback-porch = <1>;
+			hsync-len = <48>;
+			vfront-porch = <12>;
+			vback-porch = <25>;
+			vsync-len = <5>;
+			hsync-active = <0>;
+			vsync-active = <0>;
+			de-active = <1>;
+			pixelclk-active = <1>;
+		};
+	};
+};
+
+&tscadc {
+	status = "okay";
+
+	tsc {
+		ti,wires = <4>;
+		ti,x-plate-resistance = <225>;
+		ti,coordinate-readouts = <5>;
+		ti,wire-config = <0x10 0x01 0x22 0x33>;
+		ti,charge-delay = <0xf200>;
+	};
+
+	adc { 
+		ti,adc-channels = <4 5 6 7>;
+		ti,chan-step-opendelay = <0x0 0x0 0x0 0x0>;
+		ti,chan-step-sampledelay = <0x0 0x0 0x0 0x0>;
+		ti,chan-step-avg = <2 2 2 2>; 
+	};
+};

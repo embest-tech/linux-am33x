@@ -38,8 +38,8 @@
 
 #include <asm-generic/rtc.h>
 #include <asm/intel_scu_ipc.h>
-#include <asm/mrst.h>
-#include <asm/mrst-vrtc.h>
+#include <asm/intel-mid.h>
+#include <asm/intel_mid_vrtc.h>
 
 struct mrst_rtc {
 	struct rtc_device	*rtc;
@@ -76,12 +76,15 @@ static inline unsigned char vrtc_is_updating(void)
 /*
  * rtc_time's year contains the increment over 1900, but vRTC's YEAR
  * register can't be programmed to value larger than 0x64, so vRTC
- * driver chose to use 1960 (1970 is UNIX time start point) as the base,
+ * driver chose to use 1972 (1970 is UNIX time start point) as the base,
  * and does the translation at read/write time.
  *
- * Why not just use 1970 as the offset? it's because using 1960 will
+ * Why not just use 1970 as the offset? it's because using 1972 will
  * make it consistent in leap year setting for both vrtc and low-level
- * physical rtc devices.
+ * physical rtc devices. Then why not use 1960 as the offset? If we use
+ * 1960, for a device's first use, its YEAR register is 0 and the system
+ * year will be parsed as 1960 which is not a valid UNIX time and will
+ * cause many applications to fail mysteriously.
  */
 static int mrst_read_time(struct device *dev, struct rtc_time *time)
 {
@@ -99,10 +102,10 @@ static int mrst_read_time(struct device *dev, struct rtc_time *time)
 	time->tm_year = vrtc_cmos_read(RTC_YEAR);
 	spin_unlock_irqrestore(&rtc_lock, flags);
 
-	/* Adjust for the 1960/1900 */
-	time->tm_year += 60;
+	/* Adjust for the 1972/1900 */
+	time->tm_year += 72;
 	time->tm_mon--;
-	return RTC_24H;
+	return rtc_valid_tm(time);
 }
 
 static int mrst_set_time(struct device *dev, struct rtc_time *time)
@@ -119,9 +122,9 @@ static int mrst_set_time(struct device *dev, struct rtc_time *time)
 	min = time->tm_min;
 	sec = time->tm_sec;
 
-	if (yrs < 70 || yrs > 138)
+	if (yrs < 72 || yrs > 138)
 		return -EINVAL;
-	yrs -= 60;
+	yrs -= 72;
 
 	spin_lock_irqsave(&rtc_lock, flags);
 
@@ -274,13 +277,15 @@ static int mrst_procfs(struct device *dev, struct seq_file *seq)
 	valid = vrtc_cmos_read(RTC_VALID);
 	spin_unlock_irq(&rtc_lock);
 
-	return seq_printf(seq,
-			"periodic_IRQ\t: %s\n"
-			"alarm\t\t: %s\n"
-			"BCD\t\t: no\n"
-			"periodic_freq\t: daily (not adjustable)\n",
-			(rtc_control & RTC_PIE) ? "on" : "off",
-			(rtc_control & RTC_AIE) ? "on" : "off");
+	seq_printf(seq,
+		   "periodic_IRQ\t: %s\n"
+		   "alarm\t\t: %s\n"
+		   "BCD\t\t: no\n"
+		   "periodic_freq\t: daily (not adjustable)\n",
+		   (rtc_control & RTC_PIE) ? "on" : "off",
+		   (rtc_control & RTC_AIE) ? "on" : "off");
+
+	return 0;
 }
 
 #else
@@ -319,8 +324,8 @@ static irqreturn_t mrst_rtc_irq(int irq, void *p)
 	return IRQ_NONE;
 }
 
-static int __devinit
-vrtc_mrst_do_probe(struct device *dev, struct resource *iomem, int rtc_irq)
+static int vrtc_mrst_do_probe(struct device *dev, struct resource *iomem,
+			      int rtc_irq)
 {
 	int retval = 0;
 	unsigned char rtc_control;
@@ -363,7 +368,7 @@ vrtc_mrst_do_probe(struct device *dev, struct resource *iomem, int rtc_irq)
 
 	if (rtc_irq) {
 		retval = request_irq(rtc_irq, mrst_rtc_irq,
-				IRQF_DISABLED, dev_name(&mrst_rtc.rtc->dev),
+				0, dev_name(&mrst_rtc.rtc->dev),
 				mrst_rtc.rtc);
 		if (retval < 0) {
 			dev_dbg(dev, "IRQ %d is already in use, err %d\n",
@@ -377,7 +382,6 @@ vrtc_mrst_do_probe(struct device *dev, struct resource *iomem, int rtc_irq)
 cleanup1:
 	rtc_device_unregister(mrst_rtc.rtc);
 cleanup0:
-	dev_set_drvdata(dev, NULL);
 	mrst_rtc.dev = NULL;
 	release_mem_region(iomem->start, resource_size(iomem));
 	dev_err(dev, "rtc-mrst: unable to initialise\n");
@@ -391,7 +395,7 @@ static void rtc_mrst_do_shutdown(void)
 	spin_unlock_irq(&rtc_lock);
 }
 
-static void __devexit rtc_mrst_do_remove(struct device *dev)
+static void rtc_mrst_do_remove(struct device *dev)
 {
 	struct mrst_rtc	*mrst = dev_get_drvdata(dev);
 	struct resource *iomem;
@@ -409,11 +413,10 @@ static void __devexit rtc_mrst_do_remove(struct device *dev)
 	mrst->iomem = NULL;
 
 	mrst->dev = NULL;
-	dev_set_drvdata(dev, NULL);
 }
 
-#ifdef	CONFIG_PM
-static int mrst_suspend(struct device *dev, pm_message_t mesg)
+#ifdef CONFIG_PM_SLEEP
+static int mrst_suspend(struct device *dev)
 {
 	struct mrst_rtc	*mrst = dev_get_drvdata(dev);
 	unsigned char	tmp;
@@ -452,7 +455,7 @@ static int mrst_suspend(struct device *dev, pm_message_t mesg)
  */
 static inline int mrst_poweroff(struct device *dev)
 {
-	return mrst_suspend(dev, PMSG_HIBERNATE);
+	return mrst_suspend(dev);
 }
 
 static int mrst_resume(struct device *dev)
@@ -489,9 +492,11 @@ static int mrst_resume(struct device *dev)
 	return 0;
 }
 
+static SIMPLE_DEV_PM_OPS(mrst_pm_ops, mrst_suspend, mrst_resume);
+#define MRST_PM_OPS (&mrst_pm_ops)
+
 #else
-#define	mrst_suspend	NULL
-#define	mrst_resume	NULL
+#define MRST_PM_OPS NULL
 
 static inline int mrst_poweroff(struct device *dev)
 {
@@ -500,14 +505,14 @@ static inline int mrst_poweroff(struct device *dev)
 
 #endif
 
-static int __devinit vrtc_mrst_platform_probe(struct platform_device *pdev)
+static int vrtc_mrst_platform_probe(struct platform_device *pdev)
 {
 	return vrtc_mrst_do_probe(&pdev->dev,
 			platform_get_resource(pdev, IORESOURCE_MEM, 0),
 			platform_get_irq(pdev, 0));
 }
 
-static int __devexit vrtc_mrst_platform_remove(struct platform_device *pdev)
+static int vrtc_mrst_platform_remove(struct platform_device *pdev)
 {
 	rtc_mrst_do_remove(&pdev->dev);
 	return 0;
@@ -525,27 +530,15 @@ MODULE_ALIAS("platform:vrtc_mrst");
 
 static struct platform_driver vrtc_mrst_platform_driver = {
 	.probe		= vrtc_mrst_platform_probe,
-	.remove		= __devexit_p(vrtc_mrst_platform_remove),
+	.remove		= vrtc_mrst_platform_remove,
 	.shutdown	= vrtc_mrst_platform_shutdown,
 	.driver = {
-		.name		= (char *) driver_name,
-		.suspend	= mrst_suspend,
-		.resume		= mrst_resume,
+		.name	= driver_name,
+		.pm	= MRST_PM_OPS,
 	}
 };
 
-static int __init vrtc_mrst_init(void)
-{
-	return platform_driver_register(&vrtc_mrst_platform_driver);
-}
-
-static void __exit vrtc_mrst_exit(void)
-{
-	platform_driver_unregister(&vrtc_mrst_platform_driver);
-}
-
-module_init(vrtc_mrst_init);
-module_exit(vrtc_mrst_exit);
+module_platform_driver(vrtc_mrst_platform_driver);
 
 MODULE_AUTHOR("Jacob Pan; Feng Tang");
 MODULE_DESCRIPTION("Driver for Moorestown virtual RTC");

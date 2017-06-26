@@ -22,10 +22,12 @@
 /* Hardware core and driver accessible callbacks */
 
 static inline void ath9k_hw_configpcipowersave(struct ath_hw *ah,
-					       int restore,
-					       int power_off)
+					       bool power_off)
 {
-	ath9k_hw_ops(ah)->config_pci_powersave(ah, restore, power_off);
+	if (!ah->aspm_enabled)
+		return;
+
+	ath9k_hw_ops(ah)->config_pci_powersave(ah, power_off);
 }
 
 static inline void ath9k_hw_rxena(struct ath_hw *ah)
@@ -39,26 +41,23 @@ static inline void ath9k_hw_set_desc_link(struct ath_hw *ah, void *ds,
 	ath9k_hw_ops(ah)->set_desc_link(ds, link);
 }
 
-static inline bool ath9k_hw_calibrate(struct ath_hw *ah,
-				      struct ath9k_channel *chan,
-				      u8 rxchainmask,
-				      bool longcal)
+static inline int ath9k_hw_calibrate(struct ath_hw *ah,
+				     struct ath9k_channel *chan,
+				     u8 rxchainmask, bool longcal)
 {
 	return ath9k_hw_ops(ah)->calibrate(ah, chan, rxchainmask, longcal);
 }
 
-static inline bool ath9k_hw_getisr(struct ath_hw *ah, enum ath9k_int *masked)
+static inline bool ath9k_hw_getisr(struct ath_hw *ah, enum ath9k_int *masked,
+				   u32 *sync_cause_p)
 {
-	return ath9k_hw_ops(ah)->get_isr(ah, masked);
+	return ath9k_hw_ops(ah)->get_isr(ah, masked, sync_cause_p);
 }
 
-static inline void ath9k_hw_filltxdesc(struct ath_hw *ah, void *ds, u32 seglen,
-				  bool is_firstseg, bool is_lastseg,
-				  const void *ds0, dma_addr_t buf_addr,
-				  unsigned int qcu)
+static inline void ath9k_hw_set_txdesc(struct ath_hw *ah, void *ds,
+				       struct ath_tx_info *i)
 {
-	ath9k_hw_ops(ah)->fill_txdesc(ah, ds, seglen, is_firstseg, is_lastseg,
-				      ds0, buf_addr, qcu);
+	return ath9k_hw_ops(ah)->set_txdesc(ah, ds, i);
 }
 
 static inline int ath9k_hw_txprocdesc(struct ath_hw *ah, void *ds,
@@ -67,53 +66,10 @@ static inline int ath9k_hw_txprocdesc(struct ath_hw *ah, void *ds,
 	return ath9k_hw_ops(ah)->proc_txdesc(ah, ds, ts);
 }
 
-static inline void ath9k_hw_set11n_txdesc(struct ath_hw *ah, void *ds,
-					  u32 pktLen, enum ath9k_pkt_type type,
-					  u32 txPower, u32 keyIx,
-					  enum ath9k_key_type keyType,
-					  u32 flags)
+static inline int ath9k_hw_get_duration(struct ath_hw *ah, const void *ds,
+					int index)
 {
-	ath9k_hw_ops(ah)->set11n_txdesc(ah, ds, pktLen, type, txPower, keyIx,
-				      keyType, flags);
-}
-
-static inline void ath9k_hw_set11n_ratescenario(struct ath_hw *ah, void *ds,
-					void *lastds,
-					u32 durUpdateEn, u32 rtsctsRate,
-					u32 rtsctsDuration,
-					struct ath9k_11n_rate_series series[],
-					u32 nseries, u32 flags)
-{
-	ath9k_hw_ops(ah)->set11n_ratescenario(ah, ds, lastds, durUpdateEn,
-					    rtsctsRate, rtsctsDuration, series,
-					    nseries, flags);
-}
-
-static inline void ath9k_hw_set11n_aggr_first(struct ath_hw *ah, void *ds,
-					u32 aggrLen)
-{
-	ath9k_hw_ops(ah)->set11n_aggr_first(ah, ds, aggrLen);
-}
-
-static inline void ath9k_hw_set11n_aggr_middle(struct ath_hw *ah, void *ds,
-					       u32 numDelims)
-{
-	ath9k_hw_ops(ah)->set11n_aggr_middle(ah, ds, numDelims);
-}
-
-static inline void ath9k_hw_set11n_aggr_last(struct ath_hw *ah, void *ds)
-{
-	ath9k_hw_ops(ah)->set11n_aggr_last(ah, ds);
-}
-
-static inline void ath9k_hw_clr11n_aggr(struct ath_hw *ah, void *ds)
-{
-	ath9k_hw_ops(ah)->clr11n_aggr(ah, ds);
-}
-
-static inline void ath9k_hw_set_clrdmask(struct ath_hw *ah, void *ds, bool val)
-{
-	ath9k_hw_ops(ah)->set_clrdmask(ah, ds, val);
+	return ath9k_hw_ops(ah)->get_duration(ah, ds, index);
 }
 
 static inline void ath9k_hw_antdiv_comb_conf_get(struct ath_hw *ah,
@@ -128,7 +84,56 @@ static inline void ath9k_hw_antdiv_comb_conf_set(struct ath_hw *ah,
 	ath9k_hw_ops(ah)->antdiv_comb_conf_set(ah, antconf);
 }
 
+static inline void ath9k_hw_tx99_start(struct ath_hw *ah, u32 qnum)
+{
+	ath9k_hw_ops(ah)->tx99_start(ah, qnum);
+}
+
+static inline void ath9k_hw_tx99_stop(struct ath_hw *ah)
+{
+	ath9k_hw_ops(ah)->tx99_stop(ah);
+}
+
+static inline void ath9k_hw_tx99_set_txpower(struct ath_hw *ah, u8 power)
+{
+	if (ath9k_hw_ops(ah)->tx99_set_txpower)
+		ath9k_hw_ops(ah)->tx99_set_txpower(ah, power);
+}
+
+#ifdef CONFIG_ATH9K_BTCOEX_SUPPORT
+
+static inline void ath9k_hw_set_bt_ant_diversity(struct ath_hw *ah, bool enable)
+{
+	if (ath9k_hw_ops(ah)->set_bt_ant_diversity)
+		ath9k_hw_ops(ah)->set_bt_ant_diversity(ah, enable);
+}
+
+static inline bool ath9k_hw_is_aic_enabled(struct ath_hw *ah)
+{
+	if (ath9k_hw_private_ops(ah)->is_aic_enabled)
+		return ath9k_hw_private_ops(ah)->is_aic_enabled(ah);
+
+	return false;
+}
+
+#endif
+
 /* Private hardware call ops */
+
+static inline void ath9k_hw_init_hang_checks(struct ath_hw *ah)
+{
+	ath9k_hw_private_ops(ah)->init_hang_checks(ah);
+}
+
+static inline bool ath9k_hw_detect_mac_hang(struct ath_hw *ah)
+{
+	return ath9k_hw_private_ops(ah)->detect_mac_hang(ah);
+}
+
+static inline bool ath9k_hw_detect_bb_hang(struct ath_hw *ah)
+{
+	return ath9k_hw_private_ops(ah)->detect_bb_hang(ah);
+}
 
 /* PHY ops */
 
@@ -142,22 +147,6 @@ static inline void ath9k_hw_spur_mitigate_freq(struct ath_hw *ah,
 					       struct ath9k_channel *chan)
 {
 	ath9k_hw_private_ops(ah)->spur_mitigate_freq(ah, chan);
-}
-
-static inline int ath9k_hw_rf_alloc_ext_banks(struct ath_hw *ah)
-{
-	if (!ath9k_hw_private_ops(ah)->rf_alloc_ext_banks)
-		return 0;
-
-	return ath9k_hw_private_ops(ah)->rf_alloc_ext_banks(ah);
-}
-
-static inline void ath9k_hw_rf_free_ext_banks(struct ath_hw *ah)
-{
-	if (!ath9k_hw_private_ops(ah)->rf_free_ext_banks)
-		return;
-
-	ath9k_hw_private_ops(ah)->rf_free_ext_banks(ah);
 }
 
 static inline bool ath9k_hw_set_rf_regs(struct ath_hw *ah,
@@ -231,11 +220,6 @@ static inline void ath9k_hw_restore_chainmask(struct ath_hw *ah)
 	return ath9k_hw_private_ops(ah)->restore_chainmask(ah);
 }
 
-static inline void ath9k_hw_set_diversity(struct ath_hw *ah, bool value)
-{
-	return ath9k_hw_private_ops(ah)->set_diversity(ah, value);
-}
-
 static inline bool ath9k_hw_ani_control(struct ath_hw *ah,
 					enum ath9k_ani_cmd cmd, int param)
 {
@@ -258,6 +242,49 @@ static inline void ath9k_hw_setup_calibration(struct ath_hw *ah,
 					      struct ath9k_cal_list *currCal)
 {
 	ath9k_hw_private_ops(ah)->setup_calibration(ah, currCal);
+}
+
+static inline int ath9k_hw_fast_chan_change(struct ath_hw *ah,
+					    struct ath9k_channel *chan,
+					    u8 *ini_reloaded)
+{
+	return ath9k_hw_private_ops(ah)->fast_chan_change(ah, chan,
+							  ini_reloaded);
+}
+
+static inline void ath9k_hw_set_radar_params(struct ath_hw *ah)
+{
+	if (!ath9k_hw_private_ops(ah)->set_radar_params)
+		return;
+
+	ath9k_hw_private_ops(ah)->set_radar_params(ah, &ah->radar_conf);
+}
+
+static inline void ath9k_hw_init_cal_settings(struct ath_hw *ah)
+{
+	ath9k_hw_private_ops(ah)->init_cal_settings(ah);
+}
+
+static inline u32 ath9k_hw_compute_pll_control(struct ath_hw *ah,
+					       struct ath9k_channel *chan)
+{
+	return ath9k_hw_private_ops(ah)->compute_pll_control(ah, chan);
+}
+
+static inline void ath9k_hw_init_mode_gain_regs(struct ath_hw *ah)
+{
+	if (!ath9k_hw_private_ops(ah)->init_mode_gain_regs)
+		return;
+
+	ath9k_hw_private_ops(ah)->init_mode_gain_regs(ah);
+}
+
+static inline void ath9k_hw_ani_cache_ini_regs(struct ath_hw *ah)
+{
+	if (!ath9k_hw_private_ops(ah)->ani_cache_ini_regs)
+		return;
+
+	ath9k_hw_private_ops(ah)->ani_cache_ini_regs(ah);
 }
 
 #endif /* ATH9K_HW_OPS_H */

@@ -52,6 +52,7 @@
 #include <asm/smp.h>
 #include <asm/machdep.h>
 #include <asm/setup.h>
+#include <asm/paca.h>
 
 #include "mmu_decl.h"
 
@@ -65,8 +66,6 @@ struct tlbcamrange {
 	unsigned long limit;
 	phys_addr_t phys;
 } tlbcam_addrs[NUM_TLBCAMS];
-
-extern unsigned int tlbcam_index;
 
 unsigned long tlbcam_sz(int idx)
 {
@@ -101,17 +100,17 @@ unsigned long p_mapped_by_tlbcam(phys_addr_t pa)
 
 /*
  * Set up a variable-size TLB entry (tlbcam). The parameters are not checked;
- * in particular size must be a power of 4 between 4k and 256M (or 1G, for cpus
- * that support extended page sizes).  Note that while some cpus support a
- * page size of 4G, we don't allow its use here.
+ * in particular size must be a power of 4 between 4k and the max supported by
+ * an implementation; max may further be limited by what can be represented in
+ * an unsigned long (for example, 32-bit implementations cannot support a 4GB
+ * size).
  */
 static void settlbcam(int index, unsigned long virt, phys_addr_t phys,
 		unsigned long size, unsigned long flags, unsigned int pid)
 {
-	unsigned int tsize, lz;
+	unsigned int tsize;
 
-	asm (PPC_CNTLZL "%0,%1" : "=r" (lz) : "r" (size));
-	tsize = 21 - lz;
+	tsize = __ilog2(size) - 10;
 
 #ifdef CONFIG_SMP
 	if ((flags & _PAGE_NO_CACHE) == 0)
@@ -146,30 +145,43 @@ static void settlbcam(int index, unsigned long virt, phys_addr_t phys,
 	loadcam_entry(index);
 }
 
-unsigned long map_mem_in_cams(unsigned long ram, int max_cam_idx)
+unsigned long calc_cam_sz(unsigned long ram, unsigned long virt,
+			  phys_addr_t phys)
+{
+	unsigned int camsize = __ilog2(ram);
+	unsigned int align = __ffs(virt | phys);
+	unsigned long max_cam;
+
+	if ((mfspr(SPRN_MMUCFG) & MMUCFG_MAVN) == MMUCFG_MAVN_V1) {
+		/* Convert (4^max) kB to (2^max) bytes */
+		max_cam = ((mfspr(SPRN_TLB1CFG) >> 16) & 0xf) * 2 + 10;
+		camsize &= ~1U;
+		align &= ~1U;
+	} else {
+		/* Convert (2^max) kB to (2^max) bytes */
+		max_cam = __ilog2(mfspr(SPRN_TLB1PS)) + 10;
+	}
+
+	if (camsize > align)
+		camsize = align;
+	if (camsize > max_cam)
+		camsize = max_cam;
+
+	return 1UL << camsize;
+}
+
+static unsigned long map_mem_in_cams_addr(phys_addr_t phys, unsigned long virt,
+					unsigned long ram, int max_cam_idx)
 {
 	int i;
-	unsigned long virt = PAGE_OFFSET;
-	phys_addr_t phys = memstart_addr;
 	unsigned long amount_mapped = 0;
-	unsigned long max_cam = (mfspr(SPRN_TLB1CFG) >> 16) & 0xf;
-
-	/* Convert (4^max) kB to (2^max) bytes */
-	max_cam = max_cam * 2 + 10;
 
 	/* Calculate CAM values */
 	for (i = 0; ram && i < max_cam_idx; i++) {
-		unsigned int camsize = __ilog2(ram) & ~1U;
-		unsigned int align = __ffs(virt | phys) & ~1U;
 		unsigned long cam_sz;
 
-		if (camsize > align)
-			camsize = align;
-		if (camsize > max_cam)
-			camsize = max_cam;
-
-		cam_sz = 1UL << camsize;
-		settlbcam(i, virt, phys, cam_sz, PAGE_KERNEL_X, 0);
+		cam_sz = calc_cam_sz(ram, virt, phys);
+		settlbcam(i, virt, phys, cam_sz, pgprot_val(PAGE_KERNEL_X), 0);
 
 		ram -= cam_sz;
 		amount_mapped += cam_sz;
@@ -178,7 +190,21 @@ unsigned long map_mem_in_cams(unsigned long ram, int max_cam_idx)
 	}
 	tlbcam_index = i;
 
+#ifdef CONFIG_PPC64
+	get_paca()->tcd.esel_next = i;
+	get_paca()->tcd.esel_max = mfspr(SPRN_TLB1CFG) & TLBnCFG_N_ENTRY;
+	get_paca()->tcd.esel_first = i;
+#endif
+
 	return amount_mapped;
+}
+
+unsigned long map_mem_in_cams(unsigned long ram, int max_cam_idx)
+{
+	unsigned long virt = PAGE_OFFSET;
+	phys_addr_t phys = memstart_addr;
+
+	return map_mem_in_cams_addr(phys, virt, ram, max_cam_idx);
 }
 
 #ifdef CONFIG_PPC32
@@ -208,7 +234,9 @@ void __init adjust_total_lowmem(void)
 	/* adjust lowmem size to __max_low_memory */
 	ram = min((phys_addr_t)__max_low_memory, (phys_addr_t)total_lowmem);
 
+	i = switch_to_as1();
 	__max_low_memory = map_mem_in_cams(ram, CONFIG_LOWMEM_CAM_NUM);
+	restore_to_as0(i, 0, 0, 1);
 
 	pr_info("Memory CAM mapping: ");
 	for (i = 0; i < tlbcam_index - 1; i++)
@@ -227,4 +255,62 @@ void setup_initial_memory_limit(phys_addr_t first_memblock_base,
 	/* 64M mapped initially according to head_fsl_booke.S */
 	memblock_set_current_limit(min_t(u64, limit, 0x04000000));
 }
+
+#ifdef CONFIG_RELOCATABLE
+int __initdata is_second_reloc;
+notrace void __init relocate_init(u64 dt_ptr, phys_addr_t start)
+{
+	unsigned long base = KERNELBASE;
+
+	kernstart_addr = start;
+	if (is_second_reloc) {
+		virt_phys_offset = PAGE_OFFSET - memstart_addr;
+		return;
+	}
+
+	/*
+	 * Relocatable kernel support based on processing of dynamic
+	 * relocation entries. Before we get the real memstart_addr,
+	 * We will compute the virt_phys_offset like this:
+	 * virt_phys_offset = stext.run - kernstart_addr
+	 *
+	 * stext.run = (KERNELBASE & ~0x3ffffff) +
+	 *				(kernstart_addr & 0x3ffffff)
+	 * When we relocate, we have :
+	 *
+	 *	(kernstart_addr & 0x3ffffff) = (stext.run & 0x3ffffff)
+	 *
+	 * hence:
+	 *  virt_phys_offset = (KERNELBASE & ~0x3ffffff) -
+	 *                              (kernstart_addr & ~0x3ffffff)
+	 *
+	 */
+	start &= ~0x3ffffff;
+	base &= ~0x3ffffff;
+	virt_phys_offset = base - start;
+	early_get_first_memblock_info(__va(dt_ptr), NULL);
+	/*
+	 * We now get the memstart_addr, then we should check if this
+	 * address is the same as what the PAGE_OFFSET map to now. If
+	 * not we have to change the map of PAGE_OFFSET to memstart_addr
+	 * and do a second relocation.
+	 */
+	if (start != memstart_addr) {
+		int n;
+		long offset = start - memstart_addr;
+
+		is_second_reloc = 1;
+		n = switch_to_as1();
+		/* map a 64M area for the second relocation */
+		if (memstart_addr > start)
+			map_mem_in_cams(0x4000000, CONFIG_LOWMEM_CAM_NUM);
+		else
+			map_mem_in_cams_addr(start, PAGE_OFFSET + offset,
+					0x4000000, CONFIG_LOWMEM_CAM_NUM);
+		restore_to_as0(n, offset, __va(dt_ptr), 1);
+		/* We should never reach here */
+		panic("Relocation error");
+	}
+}
+#endif
 #endif

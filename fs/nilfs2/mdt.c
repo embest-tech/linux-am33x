@@ -58,12 +58,12 @@ nilfs_mdt_insert_new_block(struct inode *inode, unsigned long block,
 
 	set_buffer_mapped(bh);
 
-	kaddr = kmap_atomic(bh->b_page, KM_USER0);
+	kaddr = kmap_atomic(bh->b_page);
 	memset(kaddr + bh_offset(bh), 0, 1 << inode->i_blkbits);
 	if (init_block)
 		init_block(inode, bh, kaddr);
 	flush_dcache_page(bh->b_page);
-	kunmap_atomic(kaddr, KM_USER0);
+	kunmap_atomic(kaddr);
 
 	set_buffer_uptodate(bh);
 	mark_buffer_dirty(bh);
@@ -261,6 +261,60 @@ int nilfs_mdt_get_block(struct inode *inode, unsigned long blkoff, int create,
 }
 
 /**
+ * nilfs_mdt_find_block - find and get a buffer on meta data file.
+ * @inode: inode of the meta data file
+ * @start: start block offset (inclusive)
+ * @end: end block offset (inclusive)
+ * @blkoff: block offset
+ * @out_bh: place to store a pointer to buffer_head struct
+ *
+ * nilfs_mdt_find_block() looks up an existing block in range of
+ * [@start, @end] and stores pointer to a buffer head of the block to
+ * @out_bh, and block offset to @blkoff, respectively.  @out_bh and
+ * @blkoff are substituted only when zero is returned.
+ *
+ * Return Value: On success, it returns 0. On error, the following negative
+ * error code is returned.
+ *
+ * %-ENOMEM - Insufficient memory available.
+ *
+ * %-EIO - I/O error
+ *
+ * %-ENOENT - no block was found in the range
+ */
+int nilfs_mdt_find_block(struct inode *inode, unsigned long start,
+			 unsigned long end, unsigned long *blkoff,
+			 struct buffer_head **out_bh)
+{
+	__u64 next;
+	int ret;
+
+	if (unlikely(start > end))
+		return -ENOENT;
+
+	ret = nilfs_mdt_read_block(inode, start, true, out_bh);
+	if (!ret) {
+		*blkoff = start;
+		goto out;
+	}
+	if (unlikely(ret != -ENOENT || start == ULONG_MAX))
+		goto out;
+
+	ret = nilfs_bmap_seek_key(NILFS_I(inode)->i_bmap, start + 1, &next);
+	if (!ret) {
+		if (next <= end) {
+			ret = nilfs_mdt_read_block(inode, next, true, out_bh);
+			if (!ret)
+				*blkoff = next;
+		} else {
+			ret = -ENOENT;
+		}
+	}
+out:
+	return ret;
+}
+
+/**
  * nilfs_mdt_delete_block - make a hole on the meta data file.
  * @inode: inode of the meta data file
  * @block: block offset
@@ -375,14 +429,25 @@ int nilfs_mdt_fetch_dirty(struct inode *inode)
 static int
 nilfs_mdt_write_page(struct page *page, struct writeback_control *wbc)
 {
-	struct inode *inode;
+	struct inode *inode = page->mapping->host;
 	struct super_block *sb;
 	int err = 0;
+
+	if (inode && (inode->i_sb->s_flags & MS_RDONLY)) {
+		/*
+		 * It means that filesystem was remounted in read-only
+		 * mode because of error or metadata corruption. But we
+		 * have dirty pages that try to be flushed in background.
+		 * So, here we simply discard this dirty page.
+		 */
+		nilfs_clear_dirty_page(page, false);
+		unlock_page(page);
+		return -EROFS;
+	}
 
 	redirty_page_for_writepage(wbc, page);
 	unlock_page(page);
 
-	inode = page->mapping->host;
 	if (!inode)
 		return 0;
 
@@ -418,7 +483,6 @@ int nilfs_mdt_init(struct inode *inode, gfp_t gfp_mask, size_t objsz)
 
 	inode->i_mode = S_IFREG;
 	mapping_set_gfp_mask(inode->i_mapping, gfp_mask);
-	inode->i_mapping->backing_dev_info = inode->i_sb->s_bdi;
 
 	inode->i_op = &def_mdt_iops;
 	inode->i_fop = &def_mdt_fops;
@@ -446,13 +510,12 @@ int nilfs_mdt_setup_shadow_map(struct inode *inode,
 			       struct nilfs_shadow_map *shadow)
 {
 	struct nilfs_mdt_info *mi = NILFS_MDT(inode);
-	struct backing_dev_info *bdi = inode->i_sb->s_bdi;
 
 	INIT_LIST_HEAD(&shadow->frozen_buffers);
 	address_space_init_once(&shadow->frozen_data);
-	nilfs_mapping_init(&shadow->frozen_data, inode, bdi);
+	nilfs_mapping_init(&shadow->frozen_data, inode);
 	address_space_init_once(&shadow->frozen_btnodes);
-	nilfs_mapping_init(&shadow->frozen_btnodes, inode, bdi);
+	nilfs_mapping_init(&shadow->frozen_btnodes, inode);
 	mi->mi_shadow = shadow;
 	return 0;
 }
@@ -561,10 +624,10 @@ void nilfs_mdt_restore_from_shadow_map(struct inode *inode)
 	if (mi->mi_palloc_cache)
 		nilfs_palloc_clear_cache(inode);
 
-	nilfs_clear_dirty_pages(inode->i_mapping);
+	nilfs_clear_dirty_pages(inode->i_mapping, true);
 	nilfs_copy_back_pages(inode->i_mapping, &shadow->frozen_data);
 
-	nilfs_clear_dirty_pages(&ii->i_btnode_cache);
+	nilfs_clear_dirty_pages(&ii->i_btnode_cache, true);
 	nilfs_copy_back_pages(&ii->i_btnode_cache, &shadow->frozen_btnodes);
 
 	nilfs_bmap_restore(ii->i_bmap, &shadow->bmap_store);

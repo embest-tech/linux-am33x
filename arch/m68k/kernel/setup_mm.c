@@ -26,6 +26,7 @@
 #include <linux/initrd.h>
 
 #include <asm/bootinfo.h>
+#include <asm/byteorder.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/fpu.h>
@@ -71,12 +72,12 @@ EXPORT_SYMBOL(m68k_num_memory);
 int m68k_realnum_memory;
 EXPORT_SYMBOL(m68k_realnum_memory);
 unsigned long m68k_memoffset;
-struct mem_info m68k_memory[NUM_MEMINFO];
+struct m68k_mem_info m68k_memory[NUM_MEMINFO];
 EXPORT_SYMBOL(m68k_memory);
 
-struct mem_info m68k_ramdisk;
+static struct m68k_mem_info m68k_ramdisk __initdata;
 
-static char m68k_command_line[CL_SIZE];
+static char m68k_command_line[CL_SIZE] __initdata;
 
 void (*mach_sched_init) (irq_handler_t handler) __initdata = NULL;
 /* machine dependent irq functions */
@@ -84,7 +85,6 @@ void (*mach_init_IRQ) (void) __initdata = NULL;
 void (*mach_get_model) (char *model);
 void (*mach_get_hardware_list) (struct seq_file *m);
 /* machine dependent timer functions */
-unsigned long (*mach_gettimeoffset) (void);
 int (*mach_hwclk) (int, struct rtc_time*);
 EXPORT_SYMBOL(mach_hwclk);
 int (*mach_set_clock_mmss) (unsigned long);
@@ -144,11 +144,16 @@ extern void paging_init(void);
 
 static void __init m68k_parse_bootinfo(const struct bi_record *record)
 {
-	while (record->tag != BI_LAST) {
-		int unknown = 0;
-		const unsigned long *data = record->data;
+	uint16_t tag;
 
-		switch (record->tag) {
+	save_bootinfo(record);
+
+	while ((tag = be16_to_cpu(record->tag)) != BI_LAST) {
+		int unknown = 0;
+		const void *data = record->data;
+		uint16_t size = be16_to_cpu(record->size);
+
+		switch (tag) {
 		case BI_MACHTYPE:
 		case BI_CPUTYPE:
 		case BI_FPUTYPE:
@@ -158,20 +163,27 @@ static void __init m68k_parse_bootinfo(const struct bi_record *record)
 
 		case BI_MEMCHUNK:
 			if (m68k_num_memory < NUM_MEMINFO) {
-				m68k_memory[m68k_num_memory].addr = data[0];
-				m68k_memory[m68k_num_memory].size = data[1];
+				const struct mem_info *m = data;
+				m68k_memory[m68k_num_memory].addr =
+					be32_to_cpu(m->addr);
+				m68k_memory[m68k_num_memory].size =
+					be32_to_cpu(m->size);
 				m68k_num_memory++;
 			} else
-				printk("m68k_parse_bootinfo: too many memory chunks\n");
+				pr_warn("%s: too many memory chunks\n",
+					__func__);
 			break;
 
 		case BI_RAMDISK:
-			m68k_ramdisk.addr = data[0];
-			m68k_ramdisk.size = data[1];
+			{
+				const struct mem_info *m = data;
+				m68k_ramdisk.addr = be32_to_cpu(m->addr);
+				m68k_ramdisk.size = be32_to_cpu(m->size);
+			}
 			break;
 
 		case BI_COMMAND_LINE:
-			strlcpy(m68k_command_line, (const char *)data,
+			strlcpy(m68k_command_line, data,
 				sizeof(m68k_command_line));
 			break;
 
@@ -198,17 +210,16 @@ static void __init m68k_parse_bootinfo(const struct bi_record *record)
 				unknown = 1;
 		}
 		if (unknown)
-			printk("m68k_parse_bootinfo: unknown tag 0x%04x ignored\n",
-			       record->tag);
-		record = (struct bi_record *)((unsigned long)record +
-					      record->size);
+			pr_warn("%s: unknown tag 0x%04x ignored\n", __func__,
+				tag);
+		record = (struct bi_record *)((unsigned long)record + size);
 	}
 
 	m68k_realnum_memory = m68k_num_memory;
 #ifdef CONFIG_SINGLE_MEMORY_CHUNK
 	if (m68k_num_memory > 1) {
-		printk("Ignoring last %i chunks of physical memory\n",
-		       (m68k_num_memory - 1));
+		pr_warn("%s: ignoring last %i chunks of physical memory\n",
+			__func__, (m68k_num_memory - 1));
 		m68k_num_memory = 1;
 	}
 #endif
@@ -220,8 +231,9 @@ void __init setup_arch(char **cmdline_p)
 	int i;
 #endif
 
-	/* The bootinfo is located right after the kernel bss */
-	m68k_parse_bootinfo((const struct bi_record *)_end);
+	/* The bootinfo is located right after the kernel */
+	if (!CPU_IS_COLDFIRE)
+		m68k_parse_bootinfo((const struct bi_record *)_end);
 
 	if (CPU_IS_040)
 		m68k_is040or060 = 4;
@@ -235,7 +247,7 @@ void __init setup_arch(char **cmdline_p)
 	 *  with them, we should add a test to check_bugs() below] */
 #ifndef CONFIG_M68KFPU_EMU_ONLY
 	/* clear the fpu if we have one */
-	if (m68k_fputype & (FPU_68881|FPU_68882|FPU_68040|FPU_68060)) {
+	if (m68k_fputype & (FPU_68881|FPU_68882|FPU_68040|FPU_68060|FPU_COLDFIRE)) {
 		volatile int zero = 0;
 		asm volatile ("frestore %0" : : "m" (zero));
 	}
@@ -247,7 +259,7 @@ void __init setup_arch(char **cmdline_p)
 		asm (".chip 68060; movec %%pcr,%0; .chip 68k"
 		     : "=d" (pcr));
 		if (((pcr >> 8) & 0xff) <= 5) {
-			printk("Enabling workaround for errata I14\n");
+			pr_warn("Enabling workaround for errata I14\n");
 			asm (".chip 68060; movec %0,%%pcr; .chip 68k"
 			     : : "d" (pcr | 0x20));
 		}
@@ -258,6 +270,10 @@ void __init setup_arch(char **cmdline_p)
 	init_mm.end_data = (unsigned long)_edata;
 	init_mm.brk = (unsigned long)_end;
 
+#if defined(CONFIG_BOOTPARAM)
+	strncpy(m68k_command_line, CONFIG_BOOTPARAM_STRING, CL_SIZE);
+	m68k_command_line[CL_SIZE - 1] = 0;
+#endif /* CONFIG_BOOTPARAM */
 	*cmdline_p = m68k_command_line;
 	memcpy(boot_command_line, *cmdline_p, CL_SIZE);
 
@@ -323,15 +339,20 @@ void __init setup_arch(char **cmdline_p)
 		config_sun3x();
 		break;
 #endif
+#ifdef CONFIG_COLDFIRE
+	case MACH_M54XX:
+		config_BSP(NULL, 0);
+		break;
+#endif
 	default:
 		panic("No configuration setup");
 	}
 
+	paging_init();
+
 #ifdef CONFIG_NATFEAT
 	nf_init();
 #endif
-
-	paging_init();
 
 #ifndef CONFIG_SUN3
 	for (i = 1; i < m68k_num_memory; i++)
@@ -344,7 +365,7 @@ void __init setup_arch(char **cmdline_p)
 				     BOOTMEM_DEFAULT);
 		initrd_start = (unsigned long)phys_to_virt(m68k_ramdisk.addr);
 		initrd_end = initrd_start + m68k_ramdisk.size;
-		printk("initrd: %08lx - %08lx\n", initrd_start, initrd_end);
+		pr_info("initrd: %08lx - %08lx\n", initrd_start, initrd_end);
 	}
 #endif
 
@@ -372,6 +393,12 @@ void __init setup_arch(char **cmdline_p)
 		isa_sex = 1;
 	}
 #endif
+#ifdef CONFIG_ATARI_ROM_ISA
+	if (MACH_IS_ATARI) {
+		isa_type = ISA_TYPE_ENEC;
+		isa_sex = 0;
+	}
+#endif
 #endif
 }
 
@@ -384,6 +411,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 #define LOOP_CYCLES_68030	(8)
 #define LOOP_CYCLES_68040	(3)
 #define LOOP_CYCLES_68060	(1)
+#define LOOP_CYCLES_COLDFIRE	(2)
 
 	if (CPU_IS_020) {
 		cpu = "68020";
@@ -397,6 +425,9 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	} else if (CPU_IS_060) {
 		cpu = "68060";
 		clockfactor = LOOP_CYCLES_68060;
+	} else if (CPU_IS_COLDFIRE) {
+		cpu = "ColdFire";
+		clockfactor = LOOP_CYCLES_COLDFIRE;
 	} else {
 		cpu = "680x0";
 		clockfactor = 0;
@@ -415,6 +446,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 		fpu = "68060";
 	else if (m68k_fputype & FPU_SUNFPA)
 		fpu = "Sun FPA";
+	else if (m68k_fputype & FPU_COLDFIRE)
+		fpu = "ColdFire";
 	else
 		fpu = "none";
 #endif
@@ -431,6 +464,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 		mmu = "Sun-3";
 	else if (m68k_mmutype & MMU_APOLLO)
 		mmu = "Apollo";
+	else if (m68k_mmutype & MMU_COLDFIRE)
+		mmu = "ColdFire";
 	else
 		mmu = "unknown";
 
@@ -515,9 +550,9 @@ void check_bugs(void)
 {
 #ifndef CONFIG_M68KFPU_EMU
 	if (m68k_fputype == 0) {
-		printk(KERN_EMERG "*** YOU DO NOT HAVE A FLOATING POINT UNIT, "
+		pr_emerg("*** YOU DO NOT HAVE A FLOATING POINT UNIT, "
 			"WHICH IS REQUIRED BY LINUX/M68K ***\n");
-		printk(KERN_EMERG "Upgrade your hardware or join the FPU "
+		pr_emerg("Upgrade your hardware or join the FPU "
 			"emulation project\n");
 		panic("no FPU");
 	}

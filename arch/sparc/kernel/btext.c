@@ -6,7 +6,6 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/init.h>
-#include <linux/module.h>
 #include <linux/console.h>
 
 #include <asm/btext.h>
@@ -138,7 +137,7 @@ static void scrollscreen(void)
 }
 #endif /* ndef NO_SCROLL */
 
-void btext_drawchar(char c)
+static void btext_drawchar(char c)
 {
 	int cline = 0;
 #ifdef NO_SCROLL

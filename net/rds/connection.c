@@ -33,6 +33,7 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 #include <net/inet_hashtables.h>
 
 #include "rds.h"
@@ -50,10 +51,16 @@ static struct kmem_cache *rds_conn_slab;
 
 static struct hlist_head *rds_conn_bucket(__be32 laddr, __be32 faddr)
 {
+	static u32 rds_hash_secret __read_mostly;
+
+	unsigned long hash;
+
+	net_get_random_once(&rds_hash_secret, sizeof(rds_hash_secret));
+
 	/* Pass NULL, don't need struct net for hash */
-	unsigned long hash = inet_ehashfn(NULL,
-					  be32_to_cpu(laddr), 0,
-					  be32_to_cpu(faddr), 0);
+	hash = __inet_ehashfn(be32_to_cpu(laddr), 0,
+			      be32_to_cpu(faddr), 0,
+			      rds_hash_secret);
 	return &rds_conn_hash[hash & RDS_CONNECTION_HASH_MASK];
 }
 
@@ -68,9 +75,8 @@ static struct rds_connection *rds_conn_lookup(struct hlist_head *head,
 					      struct rds_transport *trans)
 {
 	struct rds_connection *conn, *ret = NULL;
-	struct hlist_node *pos;
 
-	hlist_for_each_entry_rcu(conn, pos, head, c_hash_node) {
+	hlist_for_each_entry_rcu(conn, head, c_hash_node) {
 		if (conn->c_faddr == faddr && conn->c_laddr == laddr &&
 				conn->c_trans == trans) {
 			ret = conn;
@@ -120,11 +126,14 @@ static struct rds_connection *__rds_conn_create(__be32 laddr, __be32 faddr,
 	struct rds_transport *loop_trans;
 	unsigned long flags;
 	int ret;
+	struct rds_transport *otrans = trans;
 
+	if (!is_outgoing && otrans->t_type == RDS_TRANS_TCP)
+		goto new_conn;
 	rcu_read_lock();
 	conn = rds_conn_lookup(head, laddr, faddr, trans);
 	if (conn && conn->c_loopback && conn->c_trans != &rds_loop_transport &&
-	    !is_outgoing) {
+	    laddr == faddr && !is_outgoing) {
 		/* This is a looped back IB connection, and we're
 		 * called by the code handling the incoming connect.
 		 * We need a second connection object into which we
@@ -136,6 +145,7 @@ static struct rds_connection *__rds_conn_create(__be32 laddr, __be32 faddr,
 	if (conn)
 		goto out;
 
+new_conn:
 	conn = kmem_cache_zalloc(rds_conn_slab, gfp);
 	if (!conn) {
 		conn = ERR_PTR(-ENOMEM);
@@ -187,6 +197,7 @@ static struct rds_connection *__rds_conn_create(__be32 laddr, __be32 faddr,
 	}
 
 	atomic_set(&conn->c_state, RDS_CONN_DOWN);
+	conn->c_send_gen = 0;
 	conn->c_reconnect_jiffies = 0;
 	INIT_DELAYED_WORK(&conn->c_send_w, rds_send_worker);
 	INIT_DELAYED_WORK(&conn->c_recv_w, rds_recv_worker);
@@ -223,13 +234,22 @@ static struct rds_connection *__rds_conn_create(__be32 laddr, __be32 faddr,
 		/* Creating normal conn */
 		struct rds_connection *found;
 
-		found = rds_conn_lookup(head, laddr, faddr, trans);
+		if (!is_outgoing && otrans->t_type == RDS_TRANS_TCP)
+			found = NULL;
+		else
+			found = rds_conn_lookup(head, laddr, faddr, trans);
 		if (found) {
 			trans->conn_free(conn->c_transport_data);
 			kmem_cache_free(rds_conn_slab, conn);
 			conn = found;
 		} else {
-			hlist_add_head_rcu(&conn->c_hash_node, head);
+			if ((is_outgoing && otrans->t_type == RDS_TRANS_TCP) ||
+			    (otrans->t_type != RDS_TRANS_TCP)) {
+				/* Only the active side should be added to
+				 * reconnect list for TCP.
+				 */
+				hlist_add_head_rcu(&conn->c_hash_node, head);
+			}
 			rds_cong_add_conn(conn);
 			rds_conn_count++;
 		}
@@ -375,7 +395,6 @@ static void rds_conn_message_info(struct socket *sock, unsigned int len,
 				  int want_send)
 {
 	struct hlist_head *head;
-	struct hlist_node *pos;
 	struct list_head *list;
 	struct rds_connection *conn;
 	struct rds_message *rm;
@@ -389,7 +408,7 @@ static void rds_conn_message_info(struct socket *sock, unsigned int len,
 
 	for (i = 0, head = rds_conn_hash; i < ARRAY_SIZE(rds_conn_hash);
 	     i++, head++) {
-		hlist_for_each_entry_rcu(conn, pos, head, c_hash_node) {
+		hlist_for_each_entry_rcu(conn, head, c_hash_node) {
 			if (want_send)
 				list = &conn->c_send_queue;
 			else
@@ -438,7 +457,6 @@ void rds_for_each_conn_info(struct socket *sock, unsigned int len,
 {
 	uint64_t buffer[(item_len + 7) / 8];
 	struct hlist_head *head;
-	struct hlist_node *pos;
 	struct rds_connection *conn;
 	size_t i;
 
@@ -449,7 +467,7 @@ void rds_for_each_conn_info(struct socket *sock, unsigned int len,
 
 	for (i = 0, head = rds_conn_hash; i < ARRAY_SIZE(rds_conn_hash);
 	     i++, head++) {
-		hlist_for_each_entry_rcu(conn, pos, head, c_hash_node) {
+		hlist_for_each_entry_rcu(conn, head, c_hash_node) {
 
 			/* XXX no c_lock usage.. */
 			if (!visitor(conn, buffer))

@@ -1,4 +1,4 @@
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/fs.h>
 #include <linux/fs_stack.h>
 
@@ -44,7 +44,7 @@ void fsstack_copy_inode_size(struct inode *dst, struct inode *src)
 	 * include/linux/fs.h).  We don't necessarily hold i_mutex when this
 	 * is called, so take i_lock for that case.
 	 *
-	 * And if CONFIG_LBADF (on 32-bit), continue our effort to keep the
+	 * And if CONFIG_LBDAF (on 32-bit), continue our effort to keep the
 	 * two halves of i_blocks in sync despite SMP or PREEMPT: use i_lock
 	 * for that case too, and do both at once by combining the tests.
 	 *
@@ -71,6 +71,6 @@ void fsstack_copy_attr_all(struct inode *dest, const struct inode *src)
 	dest->i_ctime = src->i_ctime;
 	dest->i_blkbits = src->i_blkbits;
 	dest->i_flags = src->i_flags;
-	dest->i_nlink = src->i_nlink;
+	set_nlink(dest, src->i_nlink);
 }
 EXPORT_SYMBOL_GPL(fsstack_copy_attr_all);

@@ -19,9 +19,9 @@
 #ifndef __ARCH_ARM_MACH_OMAP2_OMAP_OPP_DATA_H
 #define __ARCH_ARM_MACH_OMAP2_OMAP_OPP_DATA_H
 
-#include <plat/omap_hwmod.h>
-#include <plat/voltage.h>
+#include "omap_hwmod.h"
 
+#include "voltage.h"
 
 /*
  * *BIG FAT WARNING*:
@@ -49,8 +49,6 @@
  */
 struct omap_opp_def {
 	char *hwmod_name;
-	char *voltdm_name;
-	char *clk_name;
 
 	unsigned long freq;
 	unsigned long u_volt;
@@ -61,11 +59,9 @@ struct omap_opp_def {
 /*
  * Initialization wrapper used to define an OPP for OMAP variants.
  */
-#define OPP_INITIALIZER(_hwmod_name, _clk_name, _voltdm_name, _enabled, _freq, _uv)	\
+#define OPP_INITIALIZER(_hwmod_name, _enabled, _freq, _uv)	\
 {								\
 	.hwmod_name	= _hwmod_name,				\
-	.clk_name	= _clk_name,				\
-	.voltdm_name	= _voltdm_name,				\
 	.default_available	= _enabled,			\
 	.freq		= _freq,				\
 	.u_volt		= _uv,					\
@@ -87,19 +83,29 @@ struct omap_opp_def {
 extern int __init omap_init_opp_table(struct omap_opp_def *opp_def,
 		u32 opp_def_size);
 
+extern int __init opp_def_list_enable_opp(struct omap_opp_def *list,
+					  unsigned int size,
+					  const char *hwmod_name,
+					  unsigned long opp_freq,
+					  bool state);
+
+extern int __init opp_def_list_update_opp_voltage(struct omap_opp_def *list,
+						  unsigned int size,
+						  const char *hwmod_name,
+						  unsigned long opp_freq,
+						  unsigned long u_volt);
+
 
 extern struct omap_volt_data omap34xx_vddmpu_volt_data[];
 extern struct omap_volt_data omap34xx_vddcore_volt_data[];
-extern struct omap_vdd_dep_info omap34xx_vddmpu_dep_info[];
 extern struct omap_volt_data omap36xx_vddmpu_volt_data[];
 extern struct omap_volt_data omap36xx_vddcore_volt_data[];
-extern struct omap_vdd_dep_info omap36xx_vddmpu_dep_info[];
 
-extern struct omap_volt_data omap44xx_vdd_mpu_volt_data[];
-extern struct omap_volt_data omap44xx_vdd_iva_volt_data[];
-extern struct omap_volt_data omap44xx_vdd_core_volt_data[];
-
-extern struct omap_vdd_dep_info omap443x_vddmpu_dep_info[];
-extern struct omap_vdd_dep_info omap443x_vddiva_dep_info[];
+extern struct omap_volt_data omap443x_vdd_mpu_volt_data[];
+extern struct omap_volt_data omap443x_vdd_iva_volt_data[];
+extern struct omap_volt_data omap443x_vdd_core_volt_data[];
+extern struct omap_volt_data omap446x_vdd_mpu_volt_data[];
+extern struct omap_volt_data omap446x_vdd_iva_volt_data[];
+extern struct omap_volt_data omap446x_vdd_core_volt_data[];
 
 #endif		/* __ARCH_ARM_MACH_OMAP2_OMAP_OPP_DATA_H */

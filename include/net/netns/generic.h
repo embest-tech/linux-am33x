@@ -5,6 +5,7 @@
 #ifndef __NET_GENERIC_H__
 #define __NET_GENERIC_H__
 
+#include <linux/bug.h>
 #include <linux/rcupdate.h>
 
 /*
@@ -37,7 +38,6 @@ static inline void *net_generic(const struct net *net, int id)
 
 	rcu_read_lock();
 	ng = rcu_dereference(net->gen);
-	BUG_ON(id == 0 || id > ng->len);
 	ptr = ng->ptr[id - 1];
 	rcu_read_unlock();
 

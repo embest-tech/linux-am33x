@@ -21,7 +21,7 @@
 
 #include "mpc10x.h"
 
-static __initdata struct of_device_id of_bus_ids[] = {
+static const struct of_device_id of_bus_ids[] __initconst = {
 	{ .type = "soc", },
 	{ .compatible = "simple-bus", },
 	{},
@@ -81,29 +81,18 @@ static void __init linkstation_setup_arch(void)
 static void __init linkstation_init_IRQ(void)
 {
 	struct mpic *mpic;
-	struct device_node *dnp;
-	const u32 *prop;
-	int size;
-	phys_addr_t paddr;
 
-	dnp = of_find_node_by_type(NULL, "open-pic");
-	if (dnp == NULL)
-		return;
-
-	prop = of_get_property(dnp, "reg", &size);
-	paddr = (phys_addr_t)of_translate_address(dnp, prop);
-
-	mpic = mpic_alloc(dnp, paddr, MPIC_PRIMARY | MPIC_WANTS_RESET, 4, 32, " EPIC     ");
+	mpic = mpic_alloc(NULL, 0, 0, 4, 0, " EPIC     ");
 	BUG_ON(mpic == NULL);
 
 	/* PCI IRQs */
-	mpic_assign_isu(mpic, 0, paddr + 0x10200);
+	mpic_assign_isu(mpic, 0, mpic->paddr + 0x10200);
 
 	/* I2C */
-	mpic_assign_isu(mpic, 1, paddr + 0x11000);
+	mpic_assign_isu(mpic, 1, mpic->paddr + 0x11000);
 
 	/* ttyS0, ttyS1 */
-	mpic_assign_isu(mpic, 2, paddr + 0x11100);
+	mpic_assign_isu(mpic, 2, mpic->paddr + 0x11100);
 
 	mpic_init(mpic);
 }
@@ -158,6 +147,9 @@ static int __init linkstation_probe(void)
 
 	if (!of_flat_dt_is_compatible(root, "linkstation"))
 		return 0;
+
+	pm_power_off = linkstation_power_off;
+
 	return 1;
 }
 
@@ -169,7 +161,6 @@ define_machine(linkstation){
 	.show_cpuinfo 		= linkstation_show_cpuinfo,
 	.get_irq 		= mpic_get_irq,
 	.restart 		= linkstation_restart,
-	.power_off 		= linkstation_power_off,
 	.halt	 		= linkstation_halt,
 	.calibrate_decr 	= generic_calibrate_decr,
 };

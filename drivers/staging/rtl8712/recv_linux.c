@@ -28,11 +28,15 @@
 
 #define _RECV_OSDEP_C_
 
+#include <linux/usb.h>
+
 #include "osdep_service.h"
 #include "drv_types.h"
 #include "wifi.h"
 #include "recv_osdep.h"
 #include "osdep_intf.h"
+#include "ethernet.h"
+#include <linux/if_arp.h>
 #include "usb_ops.h"
 
 /*init os related resource in struct recv_priv*/
@@ -51,7 +55,7 @@ int r8712_os_recvbuf_resource_alloc(struct _adapter *padapter,
 	int res = _SUCCESS;
 
 	precvbuf->irp_pending = false;
-	precvbuf->purb = _usb_alloc_urb(0, GFP_KERNEL);
+	precvbuf->purb = usb_alloc_urb(0, GFP_KERNEL);
 	if (precvbuf->purb == NULL)
 		res = _FAIL;
 	precvbuf->pskb = NULL;
@@ -92,7 +96,7 @@ void r8712_handle_tkip_mic_err(struct _adapter *padapter, u8 bgroup)
 	else
 		ev.flags |= IW_MICFAILURE_PAIRWISE;
 	ev.src_addr.sa_family = ARPHRD_ETHER;
-	memcpy(ev.src_addr.sa_data, &pmlmepriv->assoc_bssid[0], ETH_ALEN);
+	ether_addr_copy(ev.src_addr.sa_data, &pmlmepriv->assoc_bssid[0]);
 	memset(&wrqu, 0x00, sizeof(wrqu));
 	wrqu.data.length = sizeof(ev);
 	wireless_send_event(padapter->pnetdev, IWEVMICHAELMICFAILURE, &wrqu,
@@ -113,13 +117,8 @@ void r8712_recv_indicatepkt(struct _adapter *padapter,
 	if (skb == NULL)
 		goto _recv_indicatepkt_drop;
 	skb->data = precv_frame->u.hdr.rx_data;
-#ifdef NET_SKBUFF_DATA_USES_OFFSET
-	skb->tail = (sk_buff_data_t)(precv_frame->u.hdr.rx_tail -
-		     precv_frame->u.hdr.rx_head);
-#else
-	skb->tail = (sk_buff_data_t)precv_frame->u.hdr.rx_tail;
-#endif
 	skb->len = precv_frame->u.hdr.len;
+	skb_set_tail_pointer(skb, skb->len);
 	if ((pattrib->tcpchk_valid == 1) && (pattrib->tcp_chkrpt == 1))
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 	else
@@ -138,32 +137,17 @@ _recv_indicatepkt_drop:
 	 precvpriv->rx_drop++;
 }
 
-void r8712_os_read_port(struct _adapter *padapter, struct recv_buf *precvbuf)
-{
-	struct recv_priv *precvpriv = &padapter->recvpriv;
-
-	precvbuf->ref_cnt--;
-	/*free skb in recv_buf*/
-	dev_kfree_skb_any(precvbuf->pskb);
-	precvbuf->pskb = NULL;
-	precvbuf->reuse = false;
-	if (precvbuf->irp_pending == false)
-		r8712_read_port(padapter, precvpriv->ff_hwaddr, 0,
-			 (unsigned char *)precvbuf);
-}
-
-static void _r8712_reordering_ctrl_timeout_handler (void *FunctionContext)
+static void _r8712_reordering_ctrl_timeout_handler (unsigned long data)
 {
 	struct recv_reorder_ctrl *preorder_ctrl =
-			 (struct recv_reorder_ctrl *)FunctionContext;
+			 (struct recv_reorder_ctrl *)data;
 
 	r8712_reordering_ctrl_timeout_handler(preorder_ctrl);
 }
 
 void r8712_init_recv_timer(struct recv_reorder_ctrl *preorder_ctrl)
 {
-	struct _adapter *padapter = preorder_ctrl->padapter;
-
-	_init_timer(&(preorder_ctrl->reordering_ctrl_timer), padapter->pnetdev,
-		    _r8712_reordering_ctrl_timeout_handler, preorder_ctrl);
+	setup_timer(&preorder_ctrl->reordering_ctrl_timer,
+		     _r8712_reordering_ctrl_timeout_handler,
+		     (unsigned long)preorder_ctrl);
 }

@@ -186,7 +186,19 @@ struct ibft_kobject {
 
 static struct iscsi_boot_kset *boot_kset;
 
+/* fully null address */
 static const char nulls[16];
+
+/* IPv4-mapped IPv6 ::ffff:0.0.0.0 */
+static const char mapped_nulls[16] = { 0x00, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0xff, 0xff,
+                                       0x00, 0x00, 0x00, 0x00 };
+
+static int address_not_null(u8 *ip)
+{
+	return (memcmp(ip, nulls, 16) && memcmp(ip, mapped_nulls, 16));
+}
 
 /*
  * Helper functions to parse data properly.
@@ -433,11 +445,11 @@ static int __init ibft_check_device(void)
  * Helper routiners to check to determine if the entry is valid
  * in the proper iBFT structure.
  */
-static mode_t ibft_check_nic_for(void *data, int type)
+static umode_t ibft_check_nic_for(void *data, int type)
 {
 	struct ibft_kobject *entry = data;
 	struct ibft_nic *nic = entry->nic;
-	mode_t rc = 0;
+	umode_t rc = 0;
 
 	switch (type) {
 	case ISCSI_BOOT_ETH_INDEX:
@@ -445,7 +457,7 @@ static mode_t ibft_check_nic_for(void *data, int type)
 		rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_IP_ADDR:
-		if (memcmp(nic->ip_addr, nulls, sizeof(nic->ip_addr)))
+		if (address_not_null(nic->ip_addr))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_SUBNET_MASK:
@@ -456,21 +468,19 @@ static mode_t ibft_check_nic_for(void *data, int type)
 		rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_GATEWAY:
-		if (memcmp(nic->gateway, nulls, sizeof(nic->gateway)))
+		if (address_not_null(nic->gateway))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_PRIMARY_DNS:
-		if (memcmp(nic->primary_dns, nulls,
-			   sizeof(nic->primary_dns)))
+		if (address_not_null(nic->primary_dns))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_SECONDARY_DNS:
-		if (memcmp(nic->secondary_dns, nulls,
-			   sizeof(nic->secondary_dns)))
+		if (address_not_null(nic->secondary_dns))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_DHCP:
-		if (memcmp(nic->dhcp, nulls, sizeof(nic->dhcp)))
+		if (address_not_null(nic->dhcp))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_ETH_VLAN:
@@ -488,11 +498,11 @@ static mode_t ibft_check_nic_for(void *data, int type)
 	return rc;
 }
 
-static mode_t __init ibft_check_tgt_for(void *data, int type)
+static umode_t __init ibft_check_tgt_for(void *data, int type)
 {
 	struct ibft_kobject *entry = data;
 	struct ibft_tgt *tgt = entry->tgt;
-	mode_t rc = 0;
+	umode_t rc = 0;
 
 	switch (type) {
 	case ISCSI_BOOT_TGT_INDEX:
@@ -524,11 +534,11 @@ static mode_t __init ibft_check_tgt_for(void *data, int type)
 	return rc;
 }
 
-static mode_t __init ibft_check_initiator_for(void *data, int type)
+static umode_t __init ibft_check_initiator_for(void *data, int type)
 {
 	struct ibft_kobject *entry = data;
 	struct ibft_initiator *init = entry->initiator;
-	mode_t rc = 0;
+	umode_t rc = 0;
 
 	switch (type) {
 	case ISCSI_BOOT_INI_INDEX:
@@ -536,23 +546,19 @@ static mode_t __init ibft_check_initiator_for(void *data, int type)
 		rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_INI_ISNS_SERVER:
-		if (memcmp(init->isns_server, nulls,
-			   sizeof(init->isns_server)))
+		if (address_not_null(init->isns_server))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_INI_SLP_SERVER:
-		if (memcmp(init->slp_server, nulls,
-			   sizeof(init->slp_server)))
+		if (address_not_null(init->slp_server))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_INI_PRI_RADIUS_SERVER:
-		if (memcmp(init->pri_radius_server, nulls,
-			   sizeof(init->pri_radius_server)))
+		if (address_not_null(init->pri_radius_server))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_INI_SEC_RADIUS_SERVER:
-		if (memcmp(init->sec_radius_server, nulls,
-			   sizeof(init->sec_radius_server)))
+		if (address_not_null(init->sec_radius_server))
 			rc = S_IRUGO;
 		break;
 	case ISCSI_BOOT_INI_INITIATOR_NAME:
@@ -746,6 +752,38 @@ static void __exit ibft_exit(void)
 	ibft_cleanup();
 }
 
+#ifdef CONFIG_ACPI
+static const struct {
+	char *sign;
+} ibft_signs[] = {
+	/*
+	 * One spec says "IBFT", the other says "iBFT". We have to check
+	 * for both.
+	 */
+	{ ACPI_SIG_IBFT },
+	{ "iBFT" },
+	{ "BIFT" },	/* Broadcom iSCSI Offload */
+};
+
+static void __init acpi_find_ibft_region(void)
+{
+	int i;
+	struct acpi_table_header *table = NULL;
+
+	if (acpi_disabled)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(ibft_signs) && !ibft_addr; i++) {
+		acpi_get_table(ibft_signs[i].sign, 0, &table);
+		ibft_addr = (struct acpi_table_ibft *)table;
+	}
+}
+#else
+static void __init acpi_find_ibft_region(void)
+{
+}
+#endif
+
 /*
  * ibft_init() - creates sysfs tree entries for the iBFT data.
  */
@@ -753,9 +791,16 @@ static int __init ibft_init(void)
 {
 	int rc = 0;
 
+	/*
+	   As on UEFI systems the setup_arch()/find_ibft_region()
+	   is called before ACPI tables are parsed and it only does
+	   legacy finding.
+	*/
+	if (!ibft_addr)
+		acpi_find_ibft_region();
+
 	if (ibft_addr) {
-		printk(KERN_INFO "iBFT detected at 0x%llx.\n",
-		       (u64)isa_virt_to_bus(ibft_addr));
+		pr_info("iBFT detected.\n");
 
 		rc = ibft_check_device();
 		if (rc)

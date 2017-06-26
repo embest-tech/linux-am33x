@@ -3,7 +3,6 @@
 #include <linux/usb/hcd.h>
 #include <linux/usb/quirks.h>
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <asm/byteorder.h>
@@ -11,7 +10,6 @@
 
 
 #define USB_MAXALTSETTING		128	/* Hard limit */
-#define USB_MAXENDPOINTS		30	/* Hard limit */
 
 #define USB_MAXCONFIG			8	/* Arbitrary limit */
 
@@ -124,9 +122,9 @@ static void usb_parse_ss_endpoint_companion(struct device *ddev, int cfgno,
 
 	if (usb_endpoint_xfer_isoc(&ep->desc))
 		max_tx = (desc->bMaxBurst + 1) * (desc->bmAttributes + 1) *
-			le16_to_cpu(ep->desc.wMaxPacketSize);
+			usb_endpoint_maxp(&ep->desc);
 	else if (usb_endpoint_xfer_int(&ep->desc))
-		max_tx = le16_to_cpu(ep->desc.wMaxPacketSize) *
+		max_tx = usb_endpoint_maxp(&ep->desc) *
 			(desc->bMaxBurst + 1);
 	else
 		max_tx = 999999;
@@ -201,6 +199,17 @@ static int usb_parse_endpoint(struct device *ddev, int cfgno, int inum,
 			if (n == 0)
 				n = 9;	/* 32 ms = 2^(9-1) uframes */
 			j = 16;
+
+			/*
+			 * Adjust bInterval for quirked devices.
+			 * This quirk fixes bIntervals reported in
+			 * linear microframes.
+			 */
+			if (to_usb_device(ddev)->quirks &
+				USB_QUIRK_LINEAR_UFRAME_INTR_BINTERVAL) {
+				n = clamp(fls(d->bInterval), i, j);
+				i = j = n;
+			}
 			break;
 		default:		/* USB_SPEED_FULL or _LOW */
 			/* For low-speed, 10 ms is the official minimum.
@@ -241,7 +250,7 @@ static int usb_parse_endpoint(struct device *ddev, int cfgno, int inum,
 		    cfgno, inum, asnum, d->bEndpointAddress);
 		endpoint->desc.bmAttributes = USB_ENDPOINT_XFER_INT;
 		endpoint->desc.bInterval = 1;
-		if (le16_to_cpu(endpoint->desc.wMaxPacketSize) > 8)
+		if (usb_endpoint_maxp(&endpoint->desc) > 8)
 			endpoint->desc.wMaxPacketSize = cpu_to_le16(8);
 	}
 
@@ -254,7 +263,7 @@ static int usb_parse_endpoint(struct device *ddev, int cfgno, int inum,
 			&& usb_endpoint_xfer_bulk(d)) {
 		unsigned maxp;
 
-		maxp = le16_to_cpu(endpoint->desc.wMaxPacketSize) & 0x07ff;
+		maxp = usb_endpoint_maxp(&endpoint->desc) & 0x07ff;
 		if (maxp != 512)
 			dev_warn(ddev, "config %d interface %d altsetting %d "
 				"bulk endpoint 0x%X has invalid maxpacket %d\n",
@@ -424,7 +433,8 @@ static int usb_parse_configuration(struct usb_device *dev, int cfgidx,
 
 	memcpy(&config->desc, buffer, USB_DT_CONFIG_SIZE);
 	if (config->desc.bDescriptorType != USB_DT_CONFIG ||
-	    config->desc.bLength < USB_DT_CONFIG_SIZE) {
+	    config->desc.bLength < USB_DT_CONFIG_SIZE ||
+	    config->desc.bLength > size) {
 		dev_err(ddev, "invalid descriptor for config index %d: "
 		    "type = 0x%X, length = %d\n", cfgidx,
 		    config->desc.bDescriptorType, config->desc.bLength);
@@ -650,10 +660,6 @@ void usb_destroy_configuration(struct usb_device *dev)
  *
  * hub-only!! ... and only in reset path, or usb_new_device()
  * (used by real hubs and virtual root hubs)
- *
- * NOTE: if this is a WUSB device and is not authorized, we skip the
- *       whole thing. A non-authorized USB device has no
- *       configurations.
  */
 int usb_get_configuration(struct usb_device *dev)
 {
@@ -665,8 +671,6 @@ int usb_get_configuration(struct usb_device *dev)
 	struct usb_config_descriptor *desc;
 
 	cfgno = 0;
-	if (dev->authorized == 0)	/* Not really an error */
-		goto out_not_authorized;
 	result = -ENOMEM;
 	if (ncfg > USB_MAXCONFIG) {
 		dev_warn(ddev, "too many configurations: %d, "
@@ -702,6 +706,8 @@ int usb_get_configuration(struct usb_device *dev)
 		if (result < 0) {
 			dev_err(ddev, "unable to read config index %d "
 			    "descriptor/%s: %d\n", cfgno, "start", result);
+			if (result != -EPIPE)
+				goto err;
 			dev_err(ddev, "chopping to %d config(s)\n", cfgno);
 			dev->descriptor.bNumConfigurations = cfgno;
 			break;
@@ -721,6 +727,10 @@ int usb_get_configuration(struct usb_device *dev)
 			result = -ENOMEM;
 			goto err;
 		}
+
+		if (dev->quirks & USB_QUIRK_DELAY_INIT)
+			msleep(100);
+
 		result = usb_get_descriptor(dev, USB_DT_CONFIG, cfgno,
 		    bigbuffer, length);
 		if (result < 0) {
@@ -748,10 +758,112 @@ int usb_get_configuration(struct usb_device *dev)
 
 err:
 	kfree(desc);
-out_not_authorized:
 	dev->descriptor.bNumConfigurations = cfgno;
 err2:
 	if (result == -ENOMEM)
 		dev_err(ddev, "out of memory\n");
 	return result;
+}
+
+void usb_release_bos_descriptor(struct usb_device *dev)
+{
+	if (dev->bos) {
+		kfree(dev->bos->desc);
+		kfree(dev->bos);
+		dev->bos = NULL;
+	}
+}
+
+/* Get BOS descriptor set */
+int usb_get_bos_descriptor(struct usb_device *dev)
+{
+	struct device *ddev = &dev->dev;
+	struct usb_bos_descriptor *bos;
+	struct usb_dev_cap_header *cap;
+	unsigned char *buffer;
+	int length, total_len, num, i;
+	int ret;
+
+	bos = kzalloc(sizeof(struct usb_bos_descriptor), GFP_KERNEL);
+	if (!bos)
+		return -ENOMEM;
+
+	/* Get BOS descriptor */
+	ret = usb_get_descriptor(dev, USB_DT_BOS, 0, bos, USB_DT_BOS_SIZE);
+	if (ret < USB_DT_BOS_SIZE) {
+		dev_err(ddev, "unable to get BOS descriptor\n");
+		if (ret >= 0)
+			ret = -ENOMSG;
+		kfree(bos);
+		return ret;
+	}
+
+	length = bos->bLength;
+	total_len = le16_to_cpu(bos->wTotalLength);
+	num = bos->bNumDeviceCaps;
+	kfree(bos);
+	if (total_len < length)
+		return -EINVAL;
+
+	dev->bos = kzalloc(sizeof(struct usb_host_bos), GFP_KERNEL);
+	if (!dev->bos)
+		return -ENOMEM;
+
+	/* Now let's get the whole BOS descriptor set */
+	buffer = kzalloc(total_len, GFP_KERNEL);
+	if (!buffer) {
+		ret = -ENOMEM;
+		goto err;
+	}
+	dev->bos->desc = (struct usb_bos_descriptor *)buffer;
+
+	ret = usb_get_descriptor(dev, USB_DT_BOS, 0, buffer, total_len);
+	if (ret < total_len) {
+		dev_err(ddev, "unable to get BOS descriptor set\n");
+		if (ret >= 0)
+			ret = -ENOMSG;
+		goto err;
+	}
+	total_len -= length;
+
+	for (i = 0; i < num; i++) {
+		buffer += length;
+		cap = (struct usb_dev_cap_header *)buffer;
+		length = cap->bLength;
+
+		if (total_len < length)
+			break;
+		total_len -= length;
+
+		if (cap->bDescriptorType != USB_DT_DEVICE_CAPABILITY) {
+			dev_warn(ddev, "descriptor type invalid, skip\n");
+			continue;
+		}
+
+		switch (cap->bDevCapabilityType) {
+		case USB_CAP_TYPE_WIRELESS_USB:
+			/* Wireless USB cap descriptor is handled by wusb */
+			break;
+		case USB_CAP_TYPE_EXT:
+			dev->bos->ext_cap =
+				(struct usb_ext_cap_descriptor *)buffer;
+			break;
+		case USB_SS_CAP_TYPE:
+			dev->bos->ss_cap =
+				(struct usb_ss_cap_descriptor *)buffer;
+			break;
+		case CONTAINER_ID_TYPE:
+			dev->bos->ss_id =
+				(struct usb_ss_container_id_descriptor *)buffer;
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 0;
+
+err:
+	usb_release_bos_descriptor(dev);
+	return ret;
 }

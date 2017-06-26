@@ -22,7 +22,6 @@
 #include <linux/mfd/da9052/da9052.h>
 #include <linux/mfd/da9052/reg.h>
 #include <linux/mfd/da9052/pdata.h>
-#include <linux/mfd/da9052/gpio.h>
 
 #define DA9052_INPUT				1
 #define DA9052_OUTPUT_OPENDRAIN		2
@@ -43,6 +42,9 @@
 #define DA9052_GPIO_MASK_UPPER_NIBBLE		0xF0
 #define DA9052_GPIO_MASK_LOWER_NIBBLE		0x0F
 #define DA9052_GPIO_NIBBLE_SHIFT		4
+#define DA9052_IRQ_GPI0			16
+#define DA9052_GPIO_ODD_SHIFT			7
+#define DA9052_GPIO_EVEN_SHIFT			3
 
 struct da9052_gpio {
 	struct da9052 *da9052;
@@ -104,33 +106,26 @@ static int da9052_gpio_get(struct gpio_chip *gc, unsigned offset)
 static void da9052_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
 {
 	struct da9052_gpio *gpio = to_da9052_gpio(gc);
-	unsigned char register_value = 0;
 	int ret;
 
 	if (da9052_gpio_port_odd(offset)) {
-		if (value) {
-			register_value = DA9052_GPIO_ODD_PORT_MODE;
 			ret = da9052_reg_update(gpio->da9052, (offset >> 1) +
 						DA9052_GPIO_0_1_REG,
 						DA9052_GPIO_ODD_PORT_MODE,
-						register_value);
+						value << DA9052_GPIO_ODD_SHIFT);
 			if (ret != 0)
 				dev_err(gpio->da9052->dev,
 					"Failed to updated gpio odd reg,%d",
 					ret);
-		}
 	} else {
-		if (value) {
-			register_value = DA9052_GPIO_EVEN_PORT_MODE;
 			ret = da9052_reg_update(gpio->da9052, (offset >> 1) +
 						DA9052_GPIO_0_1_REG,
 						DA9052_GPIO_EVEN_PORT_MODE,
-						register_value);
+						value << DA9052_GPIO_EVEN_SHIFT);
 			if (ret != 0)
 				dev_err(gpio->da9052->dev,
 					"Failed to updated gpio even reg,%d",
 					ret);
-		}
 	}
 }
 
@@ -190,10 +185,14 @@ static int da9052_gpio_to_irq(struct gpio_chip *gc, u32 offset)
 	struct da9052_gpio *gpio = to_da9052_gpio(gc);
 	struct da9052 *da9052 = gpio->da9052;
 
-	return da9052->irq_base + DA9052_IRQ_GPI0 + offset;
+	int irq;
+
+	irq = regmap_irq_get_virq(da9052->irq_data, DA9052_IRQ_GPI0 + offset);
+
+	return irq;
 }
 
-static struct gpio_chip reference_gp __devinitdata = {
+static struct gpio_chip reference_gp = {
 	.label = "da9052-gpio",
 	.owner = THIS_MODULE,
 	.get = da9052_gpio_get,
@@ -201,23 +200,23 @@ static struct gpio_chip reference_gp __devinitdata = {
 	.direction_input = da9052_gpio_direction_input,
 	.direction_output = da9052_gpio_direction_output,
 	.to_irq = da9052_gpio_to_irq,
-	.can_sleep = 1;
-	.ngpio = 16;
-	.base = -1;
+	.can_sleep = true,
+	.ngpio = 16,
+	.base = -1,
 };
 
-static int __devinit da9052_gpio_probe(struct platform_device *pdev)
+static int da9052_gpio_probe(struct platform_device *pdev)
 {
 	struct da9052_gpio *gpio;
 	struct da9052_pdata *pdata;
 	int ret;
 
-	gpio = kzalloc(sizeof(*gpio), GFP_KERNEL);
-	if (gpio == NULL)
+	gpio = devm_kzalloc(&pdev->dev, sizeof(*gpio), GFP_KERNEL);
+	if (!gpio)
 		return -ENOMEM;
 
 	gpio->da9052 = dev_get_drvdata(pdev->dev.parent);
-	pdata = gpio->da9052->dev->platform_data;
+	pdata = dev_get_platdata(gpio->da9052->dev);
 
 	gpio->gp = reference_gp;
 	if (pdata && pdata->gpio_base)
@@ -226,50 +225,31 @@ static int __devinit da9052_gpio_probe(struct platform_device *pdev)
 	ret = gpiochip_add(&gpio->gp);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Could not register gpiochip, %d\n", ret);
-		goto err_mem;
+		return ret;
 	}
 
 	platform_set_drvdata(pdev, gpio);
 
 	return 0;
-
-err_mem:
-	kfree(gpio);
-	return ret;
 }
 
-static int __devexit da9052_gpio_remove(struct platform_device *pdev)
+static int da9052_gpio_remove(struct platform_device *pdev)
 {
 	struct da9052_gpio *gpio = platform_get_drvdata(pdev);
-	int ret;
 
-	ret = gpiochip_remove(&gpio->gp);
-	if (ret == 0)
-		kfree(gpio);
-
-	return ret;
+	gpiochip_remove(&gpio->gp);
+	return 0;
 }
 
 static struct platform_driver da9052_gpio_driver = {
 	.probe = da9052_gpio_probe,
-	.remove = __devexit_p(da9052_gpio_remove),
+	.remove = da9052_gpio_remove,
 	.driver = {
 		.name	= "da9052-gpio",
-		.owner	= THIS_MODULE,
 	},
 };
 
-static int __init da9052_gpio_init(void)
-{
-	return platform_driver_register(&da9052_gpio_driver);
-}
-module_init(da9052_gpio_init);
-
-static void __exit da9052_gpio_exit(void)
-{
-	return platform_driver_unregister(&da9052_gpio_driver);
-}
-module_exit(da9052_gpio_exit);
+module_platform_driver(da9052_gpio_driver);
 
 MODULE_AUTHOR("David Dajun Chen <dchen@diasemi.com>");
 MODULE_DESCRIPTION("DA9052 GPIO Device Driver");

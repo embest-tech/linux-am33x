@@ -25,7 +25,6 @@
 #include <linux/seq_file.h>
 #include <linux/of.h>
 
-#include <asm/system.h>
 #include <asm/time.h>
 #include <asm/machdep.h>
 #include <asm/pci-bridge.h>
@@ -86,12 +85,15 @@ static void __init mpc8610_suspend_init(void)
 static inline void mpc8610_suspend_init(void) { }
 #endif /* CONFIG_SUSPEND */
 
-static struct of_device_id __initdata mpc8610_ids[] = {
+static const struct of_device_id mpc8610_ids[] __initconst = {
 	{ .compatible = "fsl,mpc8610-immr", },
 	{ .compatible = "fsl,mpc8610-guts", },
 	{ .compatible = "simple-bus", },
 	/* So that the DMA channel nodes can be probed individually: */
 	{ .compatible = "fsl,eloplus-dma", },
+	/* PCI controllers */
+	{ .compatible = "fsl,mpc8610-pci", },
+	{ .compatible = "fsl,mpc8641-pcie", },
 	{}
 };
 
@@ -108,7 +110,7 @@ static int __init mpc8610_declare_of_platform_devices(void)
 
 	return 0;
 }
-machine_device_initcall(mpc86xx_hpcd, mpc8610_declare_of_platform_devices);
+machine_arch_initcall(mpc86xx_hpcd, mpc8610_declare_of_platform_devices);
 
 #if defined(CONFIG_FB_FSL_DIU) || defined(CONFIG_FB_FSL_DIU_MODULE)
 
@@ -152,10 +154,10 @@ machine_device_initcall(mpc86xx_hpcd, mpc8610_declare_of_platform_devices);
 	(c2 << AD_COMP_2_SHIFT) | (c1 << AD_COMP_1_SHIFT) | \
 	(c0 << AD_COMP_0_SHIFT) | (size << AD_PIXEL_S_SHIFT))
 
-unsigned int mpc8610hpcd_get_pixel_format(unsigned int bits_per_pixel,
-						int monitor_port)
+u32 mpc8610hpcd_get_pixel_format(enum fsl_diu_monitor_port port,
+				 unsigned int bits_per_pixel)
 {
-	static const unsigned long pixelformat[][3] = {
+	static const u32 pixelformat[][3] = {
 		{
 			MAKE_AD(3, 0, 2, 1, 3, 8, 8, 8, 8),
 			MAKE_AD(4, 2, 0, 1, 2, 8, 8, 8, 0),
@@ -170,7 +172,8 @@ unsigned int mpc8610hpcd_get_pixel_format(unsigned int bits_per_pixel,
 	unsigned int arch_monitor;
 
 	/* The DVI port is mis-wired on revision 1 of this board. */
-	arch_monitor = ((*pixis_arch == 0x01) && (monitor_port == 0))? 0 : 1;
+	arch_monitor =
+		((*pixis_arch == 0x01) && (port == FSL_DIU_PORT_DVI)) ? 0 : 1;
 
 	switch (bits_per_pixel) {
 	case 32:
@@ -185,10 +188,11 @@ unsigned int mpc8610hpcd_get_pixel_format(unsigned int bits_per_pixel,
 	}
 }
 
-void mpc8610hpcd_set_gamma_table(int monitor_port, char *gamma_table_base)
+void mpc8610hpcd_set_gamma_table(enum fsl_diu_monitor_port port,
+				 char *gamma_table_base)
 {
 	int i;
-	if (monitor_port == 2) {		/* dual link LVDS */
+	if (port == FSL_DIU_PORT_DLVDS) {
 		for (i = 0; i < 256*3; i++)
 			gamma_table_base[i] = (gamma_table_base[i] << 2) |
 					 ((gamma_table_base[i] >> 6) & 0x03);
@@ -199,17 +203,21 @@ void mpc8610hpcd_set_gamma_table(int monitor_port, char *gamma_table_base)
 #define PX_BRDCFG0_DLINK	(1 << 4)
 #define PX_BRDCFG0_DIU_MASK	(PX_BRDCFG0_DVISEL | PX_BRDCFG0_DLINK)
 
-void mpc8610hpcd_set_monitor_port(int monitor_port)
+void mpc8610hpcd_set_monitor_port(enum fsl_diu_monitor_port port)
 {
-	static const u8 bdcfg[] = {
-		PX_BRDCFG0_DVISEL | PX_BRDCFG0_DLINK,
-		PX_BRDCFG0_DLINK,
-		0,
-	};
-
-	if (monitor_port < 3)
+	switch (port) {
+	case FSL_DIU_PORT_DVI:
 		clrsetbits_8(pixis_bdcfg0, PX_BRDCFG0_DIU_MASK,
-			     bdcfg[monitor_port]);
+			     PX_BRDCFG0_DVISEL | PX_BRDCFG0_DLINK);
+		break;
+	case FSL_DIU_PORT_LVDS:
+		clrsetbits_8(pixis_bdcfg0, PX_BRDCFG0_DIU_MASK,
+			     PX_BRDCFG0_DLINK);
+		break;
+	case FSL_DIU_PORT_DLVDS:
+		clrbits8(pixis_bdcfg0, PX_BRDCFG0_DIU_MASK);
+		break;
+	}
 }
 
 /**
@@ -220,7 +228,7 @@ void mpc8610hpcd_set_monitor_port(int monitor_port)
 void mpc8610hpcd_set_pixel_clock(unsigned int pixclock)
 {
 	struct device_node *guts_np = NULL;
-	struct ccsr_guts_86xx __iomem *guts;
+	struct ccsr_guts __iomem *guts;
 	unsigned long freq;
 	u64 temp;
 	u32 pxclk;
@@ -228,14 +236,14 @@ void mpc8610hpcd_set_pixel_clock(unsigned int pixclock)
 	/* Map the global utilities registers. */
 	guts_np = of_find_compatible_node(NULL, NULL, "fsl,mpc8610-guts");
 	if (!guts_np) {
-		pr_err("mpc8610hpcd: missing global utilties device node\n");
+		pr_err("mpc8610hpcd: missing global utilities device node\n");
 		return;
 	}
 
 	guts = of_iomap(guts_np, 0);
 	of_node_put(guts_np);
 	if (!guts) {
-		pr_err("mpc8610hpcd: could not map global utilties device\n");
+		pr_err("mpc8610hpcd: could not map global utilities device\n");
 		return;
 	}
 
@@ -262,20 +270,10 @@ void mpc8610hpcd_set_pixel_clock(unsigned int pixclock)
 	iounmap(guts);
 }
 
-ssize_t mpc8610hpcd_show_monitor_port(int monitor_port, char *buf)
+enum fsl_diu_monitor_port
+mpc8610hpcd_valid_monitor_port(enum fsl_diu_monitor_port port)
 {
-	return snprintf(buf, PAGE_SIZE,
-			"%c0 - DVI\n"
-			"%c1 - Single link LVDS\n"
-			"%c2 - Dual link LVDS\n",
-			monitor_port == 0 ? '*' : ' ',
-			monitor_port == 1 ? '*' : ' ',
-			monitor_port == 2 ? '*' : ' ');
-}
-
-int mpc8610hpcd_set_sysfs_monitor_port(int val)
-{
-	return val < 3 ? val : 0;
+	return port;
 }
 
 #endif
@@ -283,32 +281,19 @@ int mpc8610hpcd_set_sysfs_monitor_port(int val)
 static void __init mpc86xx_hpcd_setup_arch(void)
 {
 	struct resource r;
-	struct device_node *np;
 	unsigned char *pixis;
 
 	if (ppc_md.progress)
 		ppc_md.progress("mpc86xx_hpcd_setup_arch()", 0);
 
-#ifdef CONFIG_PCI
-	for_each_node_by_type(np, "pci") {
-		if (of_device_is_compatible(np, "fsl,mpc8610-pci")
-		    || of_device_is_compatible(np, "fsl,mpc8641-pcie")) {
-			struct resource rsrc;
-			of_address_to_resource(np, 0, &rsrc);
-			if ((rsrc.start & 0xfffff) == 0xa000)
-				fsl_add_bridge(np, 1);
-			else
-				fsl_add_bridge(np, 0);
-		}
-        }
-#endif
+	fsl_pci_assign_primary();
+
 #if defined(CONFIG_FB_FSL_DIU) || defined(CONFIG_FB_FSL_DIU_MODULE)
 	diu_ops.get_pixel_format	= mpc8610hpcd_get_pixel_format;
 	diu_ops.set_gamma_table		= mpc8610hpcd_set_gamma_table;
 	diu_ops.set_monitor_port	= mpc8610hpcd_set_monitor_port;
 	diu_ops.set_pixel_clock		= mpc8610hpcd_set_pixel_clock;
-	diu_ops.show_monitor_port	= mpc8610hpcd_show_monitor_port;
-	diu_ops.set_sysfs_monitor_port	= mpc8610hpcd_set_sysfs_monitor_port;
+	diu_ops.valid_monitor_port	= mpc8610hpcd_valid_monitor_port;
 #endif
 
 	pixis_node = of_find_compatible_node(NULL, NULL, "fsl,fpga-pixis");
@@ -368,5 +353,7 @@ define_machine(mpc86xx_hpcd) {
 	.time_init		= mpc86xx_time_init,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
+#ifdef CONFIG_PCI
 	.pcibios_fixup_bus	= fsl_pcibios_fixup_bus,
+#endif
 };

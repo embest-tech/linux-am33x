@@ -4,7 +4,7 @@
  * for more details.
  *
  * Based on linux/arch/mips/kernel/cevt-r4k.c,
- *          linux/arch/mips/jmr3927/rbhma3100/setup.c
+ *	    linux/arch/mips/jmr3927/rbhma3100/setup.c
  *
  * Copyright 2001 MontaVista Software Inc.
  * Copyright (C) 2000-2001 Toshiba Corporation
@@ -14,6 +14,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
+#include <linux/sched_clock.h>
 #include <asm/time.h>
 #include <asm/txx9tmr.h>
 
@@ -46,6 +47,11 @@ static struct txx9_clocksource txx9_clocksource = {
 	},
 };
 
+static u64 notrace txx9_read_sched_clock(void)
+{
+	return __raw_readl(&txx9_clocksource.tmrptr->trr);
+}
+
 void __init txx9_clocksource_init(unsigned long baseaddr,
 				  unsigned int imbusclk)
 {
@@ -61,6 +67,9 @@ void __init txx9_clocksource_init(unsigned long baseaddr,
 	__raw_writel(1 << TXX9_CLOCKSOURCE_BITS, &tmrptr->cpra);
 	__raw_writel(TCR_BASE | TXx9_TMTCR_TCE, &tmrptr->tcr);
 	txx9_clocksource.tmrptr = tmrptr;
+
+	sched_clock_register(txx9_read_sched_clock, TXX9_CLOCKSOURCE_BITS,
+			     TIMER_CLK(imbusclk));
 }
 
 struct txx9_clock_event_device {
@@ -129,7 +138,7 @@ static struct txx9_clock_event_device txx9_clock_event_device = {
 				  CLOCK_EVT_FEAT_ONESHOT,
 		.rating		= 200,
 		.set_mode	= txx9tmr_set_mode,
-		.set_next_event	= txx9tmr_set_next_event,
+		.set_next_event = txx9tmr_set_next_event,
 	},
 };
 
@@ -139,14 +148,14 @@ static irqreturn_t txx9tmr_interrupt(int irq, void *dev_id)
 	struct clock_event_device *cd = &txx9_cd->cd;
 	struct txx9_tmr_reg __iomem *tmrptr = txx9_cd->tmrptr;
 
-	__raw_writel(0, &tmrptr->tisr);	/* ack interrupt */
+	__raw_writel(0, &tmrptr->tisr); /* ack interrupt */
 	cd->event_handler(cd);
 	return IRQ_HANDLED;
 }
 
 static struct irqaction txx9tmr_irq = {
 	.handler	= txx9tmr_interrupt,
-	.flags		= IRQF_DISABLED | IRQF_PERCPU | IRQF_TIMER,
+	.flags		= IRQF_PERCPU | IRQF_TIMER,
 	.name		= "txx9tmr",
 	.dev_id		= &txx9_clock_event_device,
 };

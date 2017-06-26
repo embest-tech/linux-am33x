@@ -24,6 +24,7 @@
 #include "seq_oss_midi.h"
 #include "../seq_lock.h"
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 
 /*
@@ -97,17 +98,17 @@ snd_seq_oss_synth_init(void)
  * registration of the synth device
  */
 int
-snd_seq_oss_synth_register(struct snd_seq_device *dev)
+snd_seq_oss_synth_probe(struct device *_dev)
 {
+	struct snd_seq_device *dev = to_seq_dev(_dev);
 	int i;
 	struct seq_oss_synth *rec;
 	struct snd_seq_oss_reg *reg = SNDRV_SEQ_DEVICE_ARGPTR(dev);
 	unsigned long flags;
 
-	if ((rec = kzalloc(sizeof(*rec), GFP_KERNEL)) == NULL) {
-		snd_printk(KERN_ERR "can't malloc synth info\n");
+	rec = kzalloc(sizeof(*rec), GFP_KERNEL);
+	if (!rec)
 		return -ENOMEM;
-	}
 	rec->seq_device = -1;
 	rec->synth_type = reg->type;
 	rec->synth_subtype = reg->subtype;
@@ -129,7 +130,7 @@ snd_seq_oss_synth_register(struct snd_seq_device *dev)
 	if (i >= max_synth_devs) {
 		if (max_synth_devs >= SNDRV_SEQ_OSS_MAX_SYNTH_DEVS) {
 			spin_unlock_irqrestore(&register_lock, flags);
-			snd_printk(KERN_ERR "no more synth slot\n");
+			pr_err("ALSA: seq_oss: no more synth slot\n");
 			kfree(rec);
 			return -ENOMEM;
 		}
@@ -137,7 +138,6 @@ snd_seq_oss_synth_register(struct snd_seq_device *dev)
 	}
 	rec->seq_device = i;
 	synth_devs[i] = rec;
-	debug_printk(("synth %s registered %d\n", rec->name, i));
 	spin_unlock_irqrestore(&register_lock, flags);
 	dev->driver_data = rec;
 #ifdef SNDRV_OSS_INFO_DEV_SYNTH
@@ -149,8 +149,9 @@ snd_seq_oss_synth_register(struct snd_seq_device *dev)
 
 
 int
-snd_seq_oss_synth_unregister(struct snd_seq_device *dev)
+snd_seq_oss_synth_remove(struct device *_dev)
 {
+	struct snd_seq_device *dev = to_seq_dev(_dev);
 	int index;
 	struct seq_oss_synth *rec = dev->driver_data;
 	unsigned long flags;
@@ -162,7 +163,7 @@ snd_seq_oss_synth_unregister(struct snd_seq_device *dev)
 	}
 	if (index >= max_synth_devs) {
 		spin_unlock_irqrestore(&register_lock, flags);
-		snd_printk(KERN_ERR "can't unregister synth\n");
+		pr_err("ALSA: seq_oss: can't unregister synth\n");
 		return -EINVAL;
 	}
 	synth_devs[index] = NULL;
@@ -247,7 +248,6 @@ snd_seq_oss_synth_setup(struct seq_oss_devinfo *dp)
 		if (info->nr_voices > 0) {
 			info->ch = kcalloc(info->nr_voices, sizeof(struct seq_oss_chinfo), GFP_KERNEL);
 			if (!info->ch) {
-				snd_printk(KERN_ERR "Cannot malloc\n");
 				rec->oper.close(&info->arg);
 				module_put(rec->oper.owner);
 				snd_use_lock_free(&rec->use_lock);
@@ -255,7 +255,6 @@ snd_seq_oss_synth_setup(struct seq_oss_devinfo *dp)
 			}
 			reset_channels(info);
 		}
-		debug_printk(("synth %d assigned\n", i));
 		info->opened++;
 		rec->opened++;
 		dp->synth_opened++;
@@ -325,7 +324,6 @@ snd_seq_oss_synth_cleanup(struct seq_oss_devinfo *dp)
 			if (rec == NULL)
 				continue;
 			if (rec->opened > 0) {
-				debug_printk(("synth %d closed\n", i));
 				rec->oper.close(&info->arg);
 				module_put(rec->oper.owner);
 				rec->opened = 0;

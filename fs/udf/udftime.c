@@ -34,9 +34,10 @@
  * http://www.boulder.nist.gov/timefreq/pubs/bulletin/leapsecond.htm
  */
 
+#include "udfdecl.h"
+
 #include <linux/types.h>
 #include <linux/kernel.h>
-#include "udfdecl.h"
 
 #define EPOCH_YEAR 1970
 
@@ -79,8 +80,6 @@ static time_t year_seconds[MAX_YEAR_SECONDS] = {
 /*2034*/ SPY(64, 16, 0), SPY(65, 16, 0), SPY(66, 16, 0), SPY(67, 17, 0),
 /*2038*/ SPY(68, 17, 0)
 };
-
-extern struct timezone sys_tz;
 
 #define SECS_PER_HOUR	(60 * 60)
 #define SECS_PER_DAY	(SECS_PER_HOUR * 24)

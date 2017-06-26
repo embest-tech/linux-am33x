@@ -78,9 +78,9 @@ uint r8712_is_cckrates_included(u8 *rate)
 		if ((((rate[i]) & 0x7f) == 2) || (((rate[i]) & 0x7f) == 4) ||
 		    (((rate[i]) & 0x7f) == 11) || (((rate[i]) & 0x7f) == 22))
 			return true;
-			i++;
-		}
-		return false;
+		i++;
+	}
+	return false;
 }
 
 uint r8712_is_cckratesonly_included(u8 *rate)
@@ -124,11 +124,10 @@ u8 *r8712_get_ie(u8 *pbuf, sint index, sint *len, sint limit)
 		if (*p == index) {
 			*len = *(p + 1);
 			return p;
-		} else {
-			tmp = *(p + 1);
-			p += (tmp + 2);
-			i += (tmp + 2);
 		}
+		tmp = *(p + 1);
+		p += (tmp + 2);
+		i += (tmp + 2);
 		if (i >= limit)
 			break;
 	}
@@ -170,17 +169,11 @@ static uint r8712_get_rateset_len(u8 *rateset)
 	return i;
 }
 
-int r8712_generate_ie(struct registry_priv *pregistrypriv,
-		      struct _adapter *padapter)
+int r8712_generate_ie(struct registry_priv *pregistrypriv)
 {
 	int sz = 0, rateLen;
 	struct wlan_bssid_ex *pdev_network = &pregistrypriv->dev_network;
 	u8 *ie = pdev_network->IEs;
-	struct ieee80211_ht_cap ht_capie;
-	struct ieee80211_ht_addt_info ht_addt_info;
-	unsigned char WMM_IE[] = {0x00, 0x50, 0xf2, 0x02, 0x00, 0x01, 0x00};
-	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
-	struct qos_priv *pqospriv = &pmlmepriv->qospriv;
 
 	/*timestamp will be inserted by hardware*/
 	sz += 8;
@@ -219,33 +212,6 @@ int r8712_generate_ie(struct registry_priv *pregistrypriv,
 	/*IBSS Parameter Set*/
 	ie = r8712_set_ie(ie, _IBSS_PARA_IE_, 2,
 		    (u8 *)&(pdev_network->Configuration.ATIMWindow), &sz);
-	if (pregistrypriv->ht_enable == 1) {
-		if (pqospriv->qos_option == 0) {
-			ie = r8712_set_ie(ie, _VENDOR_SPECIFIC_IE_,
-					   _WMM_IE_Length_, WMM_IE, &sz);
-			pqospriv->qos_option = 1;
-		}
-		memset(&ht_capie, 0, sizeof(struct ieee80211_ht_cap));
-		ht_capie.cap_info = IEEE80211_HT_CAP_SUP_WIDTH |
-				    IEEE80211_HT_CAP_SGI_20 |
-				    IEEE80211_HT_CAP_SGI_40 |
-				    IEEE80211_HT_CAP_TX_STBC |
-				    IEEE80211_HT_CAP_MAX_AMSDU |
-				    IEEE80211_HT_CAP_DSSSCCK40;
-		ht_capie.ampdu_params_info = (IEEE80211_HT_CAP_AMPDU_FACTOR &
-				0x03) | (IEEE80211_HT_CAP_AMPDU_DENSITY & 0x00);
-		ie = r8712_set_ie(ie, _HT_CAPABILITY_IE_,
-			    sizeof(struct ieee80211_ht_cap),
-			    (unsigned char *)&ht_capie, &sz);
-		/*add HT info ie*/
-		memset(&ht_addt_info, 0,
-			sizeof(struct ieee80211_ht_addt_info));
-		/*need to add the HT additional IEs*/
-		ht_addt_info.control_chan = pregistrypriv->channel;
-		ie = r8712_set_ie(ie, _HT_ADD_INFO_IE_,
-			    sizeof(struct ieee80211_ht_addt_info),
-			    (unsigned char *)&ht_addt_info, &sz);
-	}
 	return sz;
 }
 
@@ -270,10 +236,9 @@ unsigned char *r8712_get_wpa_ie(unsigned char *pie, int *wpa_ie_len, int limit)
 				goto check_next_ie;
 			*wpa_ie_len = *(pbuf + 1);
 			return pbuf;
-		} else {
-			*wpa_ie_len = 0;
-			return NULL;
 		}
+		*wpa_ie_len = 0;
+		return NULL;
 check_next_ie:
 		limit = limit - (pbuf - pie) - 2 - len;
 		if (limit <= 0)
@@ -322,7 +287,7 @@ static int r8712_get_wpa2_cipher_suite(u8 *s)
 int r8712_parse_wpa_ie(u8 *wpa_ie, int wpa_ie_len, int *group_cipher,
 		 int *pairwise_cipher)
 {
-	int i, ret = _SUCCESS;
+	int i;
 	int left, count;
 	u8 *pos;
 
@@ -357,13 +322,13 @@ int r8712_parse_wpa_ie(u8 *wpa_ie, int wpa_ie_len, int *group_cipher,
 		}
 	} else if (left == 1)
 		return _FAIL;
-	return ret;
+	return _SUCCESS;
 }
 
 int r8712_parse_wpa2_ie(u8 *rsn_ie, int rsn_ie_len, int *group_cipher,
 		  int *pairwise_cipher)
 {
-	int i, ret = _SUCCESS;
+	int i;
 	int left, count;
 	u8 *pos;
 
@@ -397,19 +362,18 @@ int r8712_parse_wpa2_ie(u8 *rsn_ie, int rsn_ie_len, int *group_cipher,
 		}
 	} else if (left == 1)
 		return _FAIL;
-	return ret;
+	return _SUCCESS;
 }
 
 int r8712_get_sec_ie(u8 *in_ie, uint in_len, u8 *rsn_ie, u16 *rsn_len,
 	       u8 *wpa_ie, u16 *wpa_len)
 {
-	u8 authmode, sec_idx;
+	u8 authmode;
 	u8 wpa_oui[4] = {0x0, 0x50, 0xf2, 0x01};
 	uint cnt;
 
 	/*Search required WPA or WPA2 IE and copy to sec_ie[ ]*/
 	cnt = (_TIMESTAMP_ + _BEACON_ITERVAL_ + _CAPABILITY_);
-	sec_idx = 0;
 	while (cnt < in_len) {
 		authmode = in_ie[cnt];
 		if ((authmode == _WPA_IE_ID_) &&
@@ -447,7 +411,7 @@ int r8712_get_wps_ie(u8 *in_ie, uint in_len, u8 *wps_ie, uint *wps_ielen)
 			cnt += in_ie[cnt+1]+2;
 			match = true;
 			break;
-		} else
+		}
 			cnt += in_ie[cnt+1]+2; /* goto next */
 	}
 	return match;

@@ -5,12 +5,6 @@
 #define TARGET_CORE_NAME_MAX_LEN	64
 #define TARGET_FABRIC_NAME_SIZE		32
 
-extern struct target_fabric_configfs *target_fabric_configfs_init(
-				struct module *, const char *);
-extern void target_fabric_configfs_free(struct target_fabric_configfs *);
-extern int target_fabric_configfs_register(struct target_fabric_configfs *);
-extern void target_fabric_configfs_deregister(struct target_fabric_configfs *);
-
 struct target_fabric_configfs_template {
 	struct config_item_type tfc_discovery_cit;
 	struct config_item_type	tfc_wwn_cit;
@@ -23,6 +17,7 @@ struct target_fabric_configfs_template {
 	struct config_item_type tfc_tpg_np_cit;
 	struct config_item_type tfc_tpg_np_base_cit;
 	struct config_item_type tfc_tpg_attrib_cit;
+	struct config_item_type tfc_tpg_auth_cit;
 	struct config_item_type tfc_tpg_param_cit;
 	struct config_item_type tfc_tpg_nacl_cit;
 	struct config_item_type tfc_tpg_nacl_base_cit;
@@ -45,12 +40,9 @@ struct target_fabric_configfs {
 	struct config_item	*tf_fabric;
 	/* Passed from fabric modules */
 	struct config_item_type	*tf_fabric_cit;
-	/* Pointer to target core subsystem */
-	struct configfs_subsystem *tf_subsys;
 	/* Pointer to fabric's struct module */
 	struct module *tf_module;
 	struct target_core_fabric_ops tf_ops;
 	struct target_fabric_configfs_template tf_cit_tmpl;
 };
 
-#define TF_CIT_TMPL(tf) (&(tf)->tf_cit_tmpl)

@@ -9,6 +9,7 @@
  */
 
 #include <media/rc-map.h>
+#include <linux/module.h>
 
 /*
  * Avermedia M733A with IR model RM-K6
@@ -92,4 +93,4 @@ module_init(init_rc_map_avermedia_m733a_rm_k6)
 module_exit(exit_rc_map_avermedia_m733a_rm_k6)
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@redhat.com>");
+MODULE_AUTHOR("Mauro Carvalho Chehab");

@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2004-2010 Emulex.  All rights reserved.           *
+ * Copyright (C) 2004-2015 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
  * www.emulex.com                                                  *
  *                                                                 *
@@ -45,6 +45,7 @@
 #define LPFC_EXTRA_RING          1	/* ring 1 for other protocols */
 #define LPFC_ELS_RING            2	/* ring 2 for ELS commands */
 #define LPFC_FCP_NEXT_RING       3
+#define LPFC_FCP_OAS_RING        3
 
 #define SLI2_IOCB_CMD_R0_ENTRIES    172	/* SLI-2 FCP command ring entries */
 #define SLI2_IOCB_RSP_R0_ENTRIES    134	/* SLI-2 FCP response ring entries */
@@ -70,6 +71,7 @@
 /* vendor ID used in SCSI netlink calls */
 #define LPFC_NL_VENDOR_ID (SCSI_NL_VID_TYPE_PCI | PCI_VENDOR_ID_EMULEX)
 
+#define FW_REV_STR_SIZE	32
 /* Common Transport structures and definitions */
 
 union CtRevisionId {
@@ -105,6 +107,7 @@ struct lpfc_sli_ct_request {
 	uint8_t ReasonCode;
 	uint8_t Explanation;
 	uint8_t VendorUnique;
+#define LPFC_CT_PREAMBLE	20	/* Size of CTReq + 4 up to here */
 
 	union {
 		uint32_t PortID;
@@ -167,6 +170,8 @@ struct lpfc_sli_ct_request {
 		} rff;
 	} un;
 };
+
+#define LPFC_MAX_CT_SIZE	(60 * 4096)
 
 #define  SLI_CT_REVISION        1
 #define  GID_REQUEST_SZ   (offsetof(struct lpfc_sli_ct_request, un) + \
@@ -349,6 +354,12 @@ struct csp {
  * Word 1 Bit 31 in FLOGI response is clean address bit
  */
 #define clean_address_bit request_multiple_Nport /* Word 1, bit 31 */
+/*
+ * Word 1 Bit 30 in common service parameter is overloaded.
+ * Word 1 Bit 30 in FLOGI request is Virtual Fabrics
+ * Word 1 Bit 30 in PLOGI request is random offset
+ */
+#define virtual_fabric_support randomOffset /* Word 1, bit 30 */
 #ifdef __BIG_ENDIAN_BITFIELD
 	uint16_t request_multiple_Nport:1;	/* FC Word 1, bit 31 */
 	uint16_t randomOffset:1;	/* FC Word 1, bit 30 */
@@ -531,6 +542,7 @@ struct fc_vft_header {
 #define ELS_CMD_ECHO      0x10000000
 #define ELS_CMD_TEST      0x11000000
 #define ELS_CMD_RRQ       0x12000000
+#define ELS_CMD_REC       0x13000000
 #define ELS_CMD_PRLI      0x20100014
 #define ELS_CMD_PRLO      0x21100014
 #define ELS_CMD_PRLO_ACC  0x02100014
@@ -567,6 +579,7 @@ struct fc_vft_header {
 #define ELS_CMD_ECHO      0x10
 #define ELS_CMD_TEST      0x11
 #define ELS_CMD_RRQ       0x12
+#define ELS_CMD_REC       0x13
 #define ELS_CMD_PRLI      0x14001020
 #define ELS_CMD_PRLO      0x14001021
 #define ELS_CMD_PRLO_ACC  0x14001002
@@ -997,78 +1010,45 @@ typedef struct _ELS_PKT {	/* Structure is in Big Endian format */
 	} un;
 } ELS_PKT;
 
-/*
- * FDMI
- * HBA MAnagement Operations Command Codes
- */
-#define  SLI_MGMT_GRHL     0x100	/* Get registered HBA list */
-#define  SLI_MGMT_GHAT     0x101	/* Get HBA attributes */
-#define  SLI_MGMT_GRPL     0x102	/* Get registered Port list */
-#define  SLI_MGMT_GPAT     0x110	/* Get Port attributes */
-#define  SLI_MGMT_RHBA     0x200	/* Register HBA */
-#define  SLI_MGMT_RHAT     0x201	/* Register HBA attributes */
-#define  SLI_MGMT_RPRT     0x210	/* Register Port */
-#define  SLI_MGMT_RPA      0x211	/* Register Port attributes */
-#define  SLI_MGMT_DHBA     0x300	/* De-register HBA */
-#define  SLI_MGMT_DPRT     0x310	/* De-register Port */
+/******** FDMI ********/
+
+/* lpfc_sli_ct_request defines the CT_IU preamble for FDMI commands */
+#define  SLI_CT_FDMI_Subtypes     0x10	/* Management Service Subtype */
 
 /*
- * Management Service Subtypes
+ * Registered Port List Format
  */
-#define  SLI_CT_FDMI_Subtypes     0x10
-
-/*
- * HBA Management Service Reject Code
- */
-#define  REJECT_CODE             0x9	/* Unable to perform command request */
-
-/*
- * HBA Management Service Reject Reason Code
- * Please refer to the Reason Codes above
- */
-
-/*
- * HBA Attribute Types
- */
-#define  NODE_NAME               0x1
-#define  MANUFACTURER            0x2
-#define  SERIAL_NUMBER           0x3
-#define  MODEL                   0x4
-#define  MODEL_DESCRIPTION       0x5
-#define  HARDWARE_VERSION        0x6
-#define  DRIVER_VERSION          0x7
-#define  OPTION_ROM_VERSION      0x8
-#define  FIRMWARE_VERSION        0x9
-#define  OS_NAME_VERSION	 0xa
-#define  MAX_CT_PAYLOAD_LEN	 0xb
-
-/*
- * Port Attrubute Types
- */
-#define  SUPPORTED_FC4_TYPES     0x1
-#define  SUPPORTED_SPEED         0x2
-#define  PORT_SPEED              0x3
-#define  MAX_FRAME_SIZE          0x4
-#define  OS_DEVICE_NAME          0x5
-#define  HOST_NAME               0x6
-
-union AttributesDef {
-	/* Structure is in Big Endian format */
-	struct {
-		uint32_t AttrType:16;
-		uint32_t AttrLen:16;
-	} bits;
-	uint32_t word;
+struct lpfc_fdmi_reg_port_list {
+	uint32_t EntryCnt;
+	uint32_t pe;		/* Variable-length array */
 };
 
 
-/*
- * HBA Attribute Entry (8 - 260 bytes)
- */
-typedef struct {
-	union AttributesDef ad;
+/* Definitions for HBA / Port attribute entries */
+
+struct lpfc_fdmi_attr_def { /* Defined in TLV format */
+	/* Structure is in Big Endian format */
+	uint32_t AttrType:16;
+	uint32_t AttrLen:16;
+	uint32_t AttrValue;  /* Marks start of Value (ATTRIBUTE_ENTRY) */
+};
+
+
+/* Attribute Entry */
+struct lpfc_fdmi_attr_entry {
 	union {
 		uint32_t VendorSpecific;
+		uint32_t SupportClass;
+		uint32_t SupportSpeed;
+		uint32_t PortSpeed;
+		uint32_t MaxFrameSize;
+		uint32_t MaxCTPayloadLen;
+		uint32_t PortState;
+		uint32_t PortId;
+		struct lpfc_name NodeName;
+		struct lpfc_name PortName;
+		struct lpfc_name FabricName;
+		uint8_t FC4Types[32];
 		uint8_t Manufacturer[64];
 		uint8_t SerialNumber[64];
 		uint8_t Model[256];
@@ -1077,97 +1057,115 @@ typedef struct {
 		uint8_t DriverVersion[256];
 		uint8_t OptionROMVersion[256];
 		uint8_t FirmwareVersion[256];
-		struct lpfc_name NodeName;
-		uint8_t SupportFC4Types[32];
-		uint32_t SupportSpeed;
-		uint32_t PortSpeed;
-		uint32_t MaxFrameSize;
+		uint8_t OsHostName[256];
+		uint8_t NodeSymName[256];
 		uint8_t OsDeviceName[256];
 		uint8_t OsNameVersion[256];
-		uint32_t MaxCTPayloadLen;
 		uint8_t HostName[256];
 	} un;
-} ATTRIBUTE_ENTRY;
+};
+
+#define LPFC_FDMI_MAX_AE_SIZE	sizeof(struct lpfc_fdmi_attr_entry)
 
 /*
  * HBA Attribute Block
  */
-typedef struct {
-	uint32_t EntryCnt;	/* Number of HBA attribute entries */
-	ATTRIBUTE_ENTRY Entry;	/* Variable-length array */
-} ATTRIBUTE_BLOCK;
+struct lpfc_fdmi_attr_block {
+	uint32_t EntryCnt;		/* Number of HBA attribute entries */
+	struct lpfc_fdmi_attr_entry Entry;	/* Variable-length array */
+};
 
 /*
  * Port Entry
  */
-typedef struct {
+struct lpfc_fdmi_port_entry {
 	struct lpfc_name PortName;
-} PORT_ENTRY;
+};
 
 /*
  * HBA Identifier
  */
-typedef struct {
+struct lpfc_fdmi_hba_ident {
 	struct lpfc_name PortName;
-} HBA_IDENTIFIER;
-
-/*
- * Registered Port List Format
- */
-typedef struct {
-	uint32_t EntryCnt;
-	PORT_ENTRY pe;		/* Variable-length array */
-} REG_PORT_LIST;
+};
 
 /*
  * Register HBA(RHBA)
  */
-typedef struct {
-	HBA_IDENTIFIER hi;
-	REG_PORT_LIST rpl;	/* variable-length array */
-/* ATTRIBUTE_BLOCK   ab; */
-} REG_HBA;
+struct lpfc_fdmi_reg_hba {
+	struct lpfc_fdmi_hba_ident hi;
+	struct lpfc_fdmi_reg_port_list rpl;	/* variable-length array */
+/* struct lpfc_fdmi_attr_block   ab; */
+};
 
 /*
  * Register HBA Attributes (RHAT)
  */
-typedef struct {
+struct lpfc_fdmi_reg_hbaattr {
 	struct lpfc_name HBA_PortName;
-	ATTRIBUTE_BLOCK ab;
-} REG_HBA_ATTRIBUTE;
+	struct lpfc_fdmi_attr_block ab;
+};
 
 /*
  * Register Port Attributes (RPA)
  */
-typedef struct {
+struct lpfc_fdmi_reg_portattr {
 	struct lpfc_name PortName;
-	ATTRIBUTE_BLOCK ab;
-} REG_PORT_ATTRIBUTE;
+	struct lpfc_fdmi_attr_block ab;
+};
 
 /*
- * Get Registered HBA List (GRHL) Accept Payload Format
+ * HBA MAnagement Operations Command Codes
  */
-typedef struct {
-	uint32_t HBA__Entry_Cnt; /* Number of Registered HBA Identifiers */
-	struct lpfc_name HBA_PortName;	/* Variable-length array */
-} GRHL_ACC_PAYLOAD;
+#define  SLI_MGMT_GRHL     0x100	/* Get registered HBA list */
+#define  SLI_MGMT_GHAT     0x101	/* Get HBA attributes */
+#define  SLI_MGMT_GRPL     0x102	/* Get registered Port list */
+#define  SLI_MGMT_GPAT     0x110	/* Get Port attributes */
+#define  SLI_MGMT_GPAS     0x120	/* Get Port Statistics */
+#define  SLI_MGMT_RHBA     0x200	/* Register HBA */
+#define  SLI_MGMT_RHAT     0x201	/* Register HBA attributes */
+#define  SLI_MGMT_RPRT     0x210	/* Register Port */
+#define  SLI_MGMT_RPA      0x211	/* Register Port attributes */
+#define  SLI_MGMT_DHBA     0x300	/* De-register HBA */
+#define  SLI_MGMT_DHAT     0x301	/* De-register HBA attributes */
+#define  SLI_MGMT_DPRT     0x310	/* De-register Port */
+#define  SLI_MGMT_DPA      0x311	/* De-register Port attributes */
 
 /*
- * Get Registered Port List (GRPL) Accept Payload Format
+ * HBA Attribute Types
  */
-typedef struct {
-	uint32_t RPL_Entry_Cnt;	/* Number of Registered Port Entries */
-	PORT_ENTRY Reg_Port_Entry[1];	/* Variable-length array */
-} GRPL_ACC_PAYLOAD;
+#define  RHBA_NODENAME           0x1 /* 8 byte WWNN */
+#define  RHBA_MANUFACTURER       0x2 /* 4 to 64 byte ASCII string */
+#define  RHBA_SERIAL_NUMBER      0x3 /* 4 to 64 byte ASCII string */
+#define  RHBA_MODEL              0x4 /* 4 to 256 byte ASCII string */
+#define  RHBA_MODEL_DESCRIPTION  0x5 /* 4 to 256 byte ASCII string */
+#define  RHBA_HARDWARE_VERSION   0x6 /* 4 to 256 byte ASCII string */
+#define  RHBA_DRIVER_VERSION     0x7 /* 4 to 256 byte ASCII string */
+#define  RHBA_OPTION_ROM_VERSION 0x8 /* 4 to 256 byte ASCII string */
+#define  RHBA_FIRMWARE_VERSION   0x9 /* 4 to 256 byte ASCII string */
+#define  RHBA_OS_NAME_VERSION	 0xa /* 4 to 256 byte ASCII string */
+#define  RHBA_MAX_CT_PAYLOAD_LEN 0xb /* 32-bit unsigned int */
+#define  RHBA_SYM_NODENAME       0xc /* 4 to 256 byte ASCII string */
 
 /*
- * Get Port Attributes (GPAT) Accept Payload Format
+ * Port Attrubute Types
  */
-
-typedef struct {
-	ATTRIBUTE_BLOCK pab;
-} GPAT_ACC_PAYLOAD;
-
+#define  RPRT_SUPPORTED_FC4_TYPES     0x1 /* 32 byte binary array */
+#define  RPRT_SUPPORTED_SPEED         0x2 /* 32-bit unsigned int */
+#define  RPRT_PORT_SPEED              0x3 /* 32-bit unsigned int */
+#define  RPRT_MAX_FRAME_SIZE          0x4 /* 32-bit unsigned int */
+#define  RPRT_OS_DEVICE_NAME          0x5 /* 4 to 256 byte ASCII string */
+#define  RPRT_HOST_NAME               0x6 /* 4 to 256 byte ASCII string */
+#define  RPRT_NODENAME                0x7 /* 8 byte WWNN */
+#define  RPRT_PORTNAME                0x8 /* 8 byte WWNN */
+#define  RPRT_SYM_PORTNAME            0x9 /* 4 to 256 byte ASCII string */
+#define  RPRT_PORT_TYPE               0xa /* 32-bit unsigned int */
+#define  RPRT_SUPPORTED_CLASS         0xb /* 32-bit unsigned int */
+#define  RPRT_FABRICNAME              0xc /* 8 byte Fabric WWNN */
+#define  RPRT_ACTIVE_FC4_TYPES        0xd /* 32 byte binary array */
+#define  RPRT_PORT_STATE              0x101 /* 32-bit unsigned int */
+#define  RPRT_DISC_PORT               0x102 /* 32-bit unsigned int */
+#define  RPRT_PORT_ID                 0x103 /* 32-bit unsigned int */
 
 /*
  *  Begin HBA configuration parameters.
@@ -1181,8 +1179,8 @@ typedef struct {
  */
 
 /* Number of rings currently used and available. */
-#define MAX_CONFIGURED_RINGS     3
-#define MAX_RINGS                4
+#define MAX_SLI3_CONFIGURED_RINGS     3
+#define MAX_SLI3_RINGS                4
 
 /* IOCB / Mailbox is owned by FireFly */
 #define OWN_CHIP        1
@@ -1244,6 +1242,8 @@ typedef struct {
 #define PCI_VENDOR_ID_SERVERENGINE  0x19a2
 #define PCI_DEVICE_ID_TIGERSHARK    0x0704
 #define PCI_DEVICE_ID_TOMCAT        0x0714
+#define PCI_DEVICE_ID_SKYHAWK       0x0724
+#define PCI_DEVICE_ID_SKYHAWK_VF    0x072c
 
 #define JEDEC_ID_ADDRESS            0x0080001c
 #define FIREFLY_JEDEC_ID            0x1ACC
@@ -1451,6 +1451,7 @@ typedef struct {		/* FireFly BIU registers */
 #define MBX_UNREG_FCFI	    0xA2
 #define MBX_INIT_VFI        0xA3
 #define MBX_INIT_VPI        0xA4
+#define MBX_ACCESS_VDATA    0xA5
 
 #define MBX_AUTH_PORT       0xF8
 #define MBX_SECURITY_MGMT   0xF9
@@ -1655,6 +1656,7 @@ enum lpfc_protgrp_type {
 #define	BG_OP_IN_CSUM_OUT_CSUM		0x5
 #define	BG_OP_IN_CRC_OUT_CSUM		0x6
 #define	BG_OP_IN_CSUM_OUT_CRC		0x7
+#define	BG_OP_RAW_MODE			0x8
 
 struct lpfc_pde5 {
 	uint32_t word0;
@@ -1852,8 +1854,8 @@ typedef struct {
 	uint8_t fabric_AL_PA;	/* If using a Fabric Assigned AL_PA */
 #endif
 
-#define FLAGS_LOCAL_LB               0x01 /* link_flags (=1) ENDEC loopback */
 #define FLAGS_TOPOLOGY_MODE_LOOP_PT  0x00 /* Attempt loop then pt-pt */
+#define FLAGS_LOCAL_LB               0x01 /* link_flags (=1) ENDEC loopback */
 #define FLAGS_TOPOLOGY_MODE_PT_PT    0x02 /* Attempt pt-pt only */
 #define FLAGS_TOPOLOGY_MODE_LOOP     0x04 /* Attempt loop only */
 #define FLAGS_TOPOLOGY_MODE_PT_LOOP  0x06 /* Attempt pt-pt then loop */
@@ -2561,6 +2563,8 @@ typedef struct {
 
 #define  DMP_MEM_REG             0x1
 #define  DMP_NV_PARAMS           0x2
+#define  DMP_LMSD                0x3 /* Link Module Serial Data */
+#define  DMP_WELL_KNOWN          0x4
 
 #define  DMP_REGION_VPD          0xe
 #define  DMP_VPD_SIZE            0x400  /* maximum amount of VPD */
@@ -2819,7 +2823,8 @@ typedef struct {
 #ifdef __BIG_ENDIAN_BITFIELD
 	uint32_t rsvd1     : 19;  /* Reserved                             */
 	uint32_t cdss      :  1;  /* Configure Data Security SLI          */
-	uint32_t rsvd2     :  3;  /* Reserved                             */
+	uint32_t casabt    :  1;  /* Configure async abts status notice   */
+	uint32_t rsvd2     :  2;  /* Reserved                             */
 	uint32_t cbg       :  1;  /* Configure BlockGuard                 */
 	uint32_t cmv       :  1;  /* Configure Max VPIs                   */
 	uint32_t ccrp      :  1;  /* Config Command Ring Polling          */
@@ -2839,14 +2844,16 @@ typedef struct {
 	uint32_t ccrp      :  1;  /* Config Command Ring Polling          */
 	uint32_t cmv	   :  1;  /* Configure Max VPIs                   */
 	uint32_t cbg       :  1;  /* Configure BlockGuard                 */
-	uint32_t rsvd2     :  3;  /* Reserved                             */
+	uint32_t rsvd2     :  2;  /* Reserved                             */
+	uint32_t casabt    :  1;  /* Configure async abts status notice   */
 	uint32_t cdss      :  1;  /* Configure Data Security SLI          */
 	uint32_t rsvd1     : 19;  /* Reserved                             */
 #endif
 #ifdef __BIG_ENDIAN_BITFIELD
 	uint32_t rsvd3     : 19;  /* Reserved                             */
 	uint32_t gdss      :  1;  /* Configure Data Security SLI          */
-	uint32_t rsvd4     :  3;  /* Reserved                             */
+	uint32_t gasabt    :  1;  /* Grant async abts status notice       */
+	uint32_t rsvd4     :  2;  /* Reserved                             */
 	uint32_t gbg       :  1;  /* Grant BlockGuard                     */
 	uint32_t gmv	   :  1;  /* Grant Max VPIs                       */
 	uint32_t gcrp	   :  1;  /* Grant Command Ring Polling           */
@@ -2866,7 +2873,8 @@ typedef struct {
 	uint32_t gcrp	   :  1;  /* Grant Command Ring Polling           */
 	uint32_t gmv	   :  1;  /* Grant Max VPIs                       */
 	uint32_t gbg       :  1;  /* Grant BlockGuard                     */
-	uint32_t rsvd4     :  3;  /* Reserved                             */
+	uint32_t rsvd4     :  2;  /* Reserved                             */
+	uint32_t gasabt    :  1;  /* Grant async abts status notice       */
 	uint32_t gdss      :  1;  /* Configure Data Security SLI          */
 	uint32_t rsvd3     : 19;  /* Reserved                             */
 #endif
@@ -2978,7 +2986,7 @@ typedef struct _PCB {
 
 	uint32_t pgpAddrLow;
 	uint32_t pgpAddrHigh;
-	SLI2_RDSC rdsc[MAX_RINGS];
+	SLI2_RDSC rdsc[MAX_SLI3_RINGS];
 } PCB_t;
 
 /* NEW_FEATURE */
@@ -3088,18 +3096,18 @@ struct lpfc_pgp {
 
 struct sli2_desc {
 	uint32_t unused1[16];
-	struct lpfc_hgp host[MAX_RINGS];
-	struct lpfc_pgp port[MAX_RINGS];
+	struct lpfc_hgp host[MAX_SLI3_RINGS];
+	struct lpfc_pgp port[MAX_SLI3_RINGS];
 };
 
 struct sli3_desc {
-	struct lpfc_hgp host[MAX_RINGS];
+	struct lpfc_hgp host[MAX_SLI3_RINGS];
 	uint32_t reserved[8];
 	uint32_t hbq_put[16];
 };
 
 struct sli3_pgp {
-	struct lpfc_pgp port[MAX_RINGS];
+	struct lpfc_pgp port[MAX_SLI3_RINGS];
 	uint32_t hbq_get[16];
 };
 
@@ -3229,6 +3237,7 @@ typedef struct {
 #define IOERR_SLI_DOWN                0x101  /* ulpStatus  - Driver defined */
 #define IOERR_SLI_BRESET              0x102
 #define IOERR_SLI_ABORTED             0x103
+#define IOERR_PARAM_MASK              0x1ff
 } PARM_ERR;
 
 typedef union {
@@ -3361,6 +3370,9 @@ typedef struct {
 	WORD5 w5;		/* Header control/status word */
 } XMT_SEQ_FIELDS64;
 
+/* This word is remote ports D_ID for XMIT_ELS_RSP64 */
+#define xmit_els_remoteID xrsqRo
+
 /* IOCB Command template for 64 bit RCV_SEQUENCE64 */
 typedef struct {
 	struct ulp_bde64 rcvBde;
@@ -3465,6 +3477,7 @@ typedef struct {
 } ASYNCSTAT_FIELDS;
 #define ASYNC_TEMP_WARN		0x100
 #define ASYNC_TEMP_SAFE		0x101
+#define ASYNC_STATUS_CN		0x102
 
 /* IOCB Command template for CMD_IOCB_RCV_ELS64_CX (0xB7)
    or CMD_IOCB_RCV_SEQ64_CX (0xB5) */

@@ -1,7 +1,8 @@
 /*
  * AM33XX Clock Domain data.
  *
- * Copyright (C) 2011 Texas Instruments, Inc. - http://www.ti.com/
+ * Copyright (C) 2011-2012 Texas Instruments Incorporated - http://www.ti.com/
+ * Vaibhav Hiremath <hvaibhav@ti.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -21,13 +22,11 @@
 #include "cm33xx.h"
 #include "cm-regbits-33xx.h"
 
-
 static struct clockdomain l4ls_am33xx_clkdm = {
 	.name		= "l4ls_clkdm",
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_L4LS_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -36,7 +35,6 @@ static struct clockdomain l3s_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_L3S_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -45,7 +43,6 @@ static struct clockdomain l4fw_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_L4FW_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -54,7 +51,6 @@ static struct clockdomain l3_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_L3_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -63,7 +59,6 @@ static struct clockdomain l4hs_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_L4HS_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -72,16 +67,14 @@ static struct clockdomain ocpwp_l3_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_OCPWP_L3_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
-static struct clockdomain icss_ocp_am33xx_clkdm = {
-	.name		= "icss_ocp_clkdm",
+static struct clockdomain pruss_ocp_am33xx_clkdm = {
+	.name		= "pruss_ocp_clkdm",
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
-	.clkdm_offs	= AM33XX_CM_PER_ICSS_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
+	.clkdm_offs	= AM33XX_CM_PER_PRUSS_CLKSTCTRL_OFFSET,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -90,7 +83,6 @@ static struct clockdomain cpsw_125mhz_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_CPSW_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -99,7 +91,6 @@ static struct clockdomain lcdc_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_LCDC_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -108,7 +99,6 @@ static struct clockdomain clk_24mhz_am33xx_clkdm = {
 	.pwrdm		= { .name = "per_pwrdm" },
 	.cm_inst	= AM33XX_CM_PER_MOD,
 	.clkdm_offs	= AM33XX_CM_PER_CLK_24MHZ_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -117,7 +107,6 @@ static struct clockdomain l4_wkup_am33xx_clkdm = {
 	.pwrdm		= { .name = "wkup_pwrdm" },
 	.cm_inst	= AM33XX_CM_WKUP_MOD,
 	.clkdm_offs	= AM33XX_CM_WKUP_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -126,7 +115,6 @@ static struct clockdomain l3_aon_am33xx_clkdm = {
 	.pwrdm		= { .name = "wkup_pwrdm" },
 	.cm_inst	= AM33XX_CM_WKUP_MOD,
 	.clkdm_offs	= AM33XX_CM_L3_AON_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -135,7 +123,6 @@ static struct clockdomain l4_wkup_aon_am33xx_clkdm = {
 	.pwrdm		= { .name = "wkup_pwrdm" },
 	.cm_inst	= AM33XX_CM_WKUP_MOD,
 	.clkdm_offs	= AM33XX_CM_L4_WKUP_AON_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -144,7 +131,6 @@ static struct clockdomain mpu_am33xx_clkdm = {
 	.pwrdm		= { .name = "mpu_pwrdm" },
 	.cm_inst	= AM33XX_CM_MPU_MOD,
 	.clkdm_offs	= AM33XX_CM_MPU_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -153,7 +139,6 @@ static struct clockdomain l4_rtc_am33xx_clkdm = {
 	.pwrdm		= { .name = "rtc_pwrdm" },
 	.cm_inst	= AM33XX_CM_RTC_MOD,
 	.clkdm_offs	= AM33XX_CM_RTC_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -162,7 +147,6 @@ static struct clockdomain gfx_l3_am33xx_clkdm = {
 	.pwrdm		= { .name = "gfx_pwrdm" },
 	.cm_inst	= AM33XX_CM_GFX_MOD,
 	.clkdm_offs	= AM33XX_CM_GFX_L3_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -171,7 +155,6 @@ static struct clockdomain gfx_l4ls_gfx_am33xx_clkdm = {
 	.pwrdm		= { .name = "gfx_pwrdm" },
 	.cm_inst	= AM33XX_CM_GFX_MOD,
 	.clkdm_offs	= AM33XX_CM_GFX_L4LS_GFX_CLKSTCTRL__1_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -180,16 +163,6 @@ static struct clockdomain l4_cefuse_am33xx_clkdm = {
 	.pwrdm		= { .name = "cefuse_pwrdm" },
 	.cm_inst	= AM33XX_CM_CEFUSE_MOD,
 	.clkdm_offs	= AM33XX_CM_CEFUSE_CLKSTCTRL_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
-	.flags		= CLKDM_CAN_SWSUP,
-};
-
-static struct clockdomain wkup_usb_am33xx_clkdm = {
-	.name		= "wkup_usb_clkdm",
-	.pwrdm		= { .name = "wkup_pwrdm" },
-	.cm_inst	= AM33XX_CM_WKUP_MOD,
-	.clkdm_offs	= AM33XX_CM_CLKDCOLDO_DPLL_PER_OFFSET,
-	.clktrctrl_mask	= AM33XX_CLKTRCTRL_MASK,
 	.flags		= CLKDM_CAN_SWSUP,
 };
 
@@ -200,7 +173,7 @@ static struct clockdomain *clockdomains_am33xx[] __initdata = {
 	&l3_am33xx_clkdm,
 	&l4hs_am33xx_clkdm,
 	&ocpwp_l3_am33xx_clkdm,
-	&icss_ocp_am33xx_clkdm,
+	&pruss_ocp_am33xx_clkdm,
 	&cpsw_125mhz_am33xx_clkdm,
 	&lcdc_am33xx_clkdm,
 	&clk_24mhz_am33xx_clkdm,
@@ -212,13 +185,12 @@ static struct clockdomain *clockdomains_am33xx[] __initdata = {
 	&gfx_l3_am33xx_clkdm,
 	&gfx_l4ls_gfx_am33xx_clkdm,
 	&l4_cefuse_am33xx_clkdm,
-	&wkup_usb_am33xx_clkdm,
 	NULL,
 };
 
 void __init am33xx_clockdomains_init(void)
 {
-	clkdm_register_platform_funcs(&omap3_clkdm_operations);
+	clkdm_register_platform_funcs(&am33xx_clkdm_operations);
 	clkdm_register_clkdms(clockdomains_am33xx);
 	clkdm_complete_init();
 }

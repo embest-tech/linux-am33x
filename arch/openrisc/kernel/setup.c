@@ -40,8 +40,8 @@
 #include <linux/device.h>
 #include <linux/of_platform.h>
 
+#include <asm/sections.h>
 #include <asm/segment.h>
-#include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/types.h>
 #include <asm/setup.h>
@@ -50,8 +50,6 @@
 #include <asm/delay.h>
 
 #include "vmlinux.h"
-
-char __initdata cmd_line[COMMAND_LINE_SIZE] = CONFIG_CMDLINE;
 
 static unsigned long __init setup_memory(void)
 {
@@ -78,7 +76,7 @@ static unsigned long __init setup_memory(void)
 
 	ram_start_pfn = PFN_UP(memory_start);
 	/* free_ram_start_pfn is first page after kernel */
-	free_ram_start_pfn = PFN_UP(__pa(&_end));
+	free_ram_start_pfn = PFN_UP(__pa(_end));
 	ram_end_pfn = PFN_DOWN(memblock_end_of_DRAM());
 
 	max_pfn = ram_end_pfn;
@@ -207,18 +205,18 @@ void __init setup_cpuinfo(void)
  * Handles the pointer to the device tree that this kernel is to use
  * for establishing the available platform devices.
  *
- * For now, this is limited to using the built-in device tree.  In the future,
- * it is intended that this function will take a pointer to the device tree
- * that is potentially built-in, but potentially also passed in by the
- * bootloader, or discovered by some equally clever means...
+ * Falls back on built-in device tree in case null pointer is passed.
  */
 
-void __init or32_early_setup(void)
+void __init or32_early_setup(void *fdt)
 {
-
-	early_init_devtree(__dtb_start);
-
-	printk(KERN_INFO "Compiled-in FDT at 0x%p\n", __dtb_start);
+	if (fdt)
+		pr_info("FDT at %p\n", fdt);
+	else {
+		fdt = __dtb_start;
+		pr_info("Compiled-in FDT at %p\n", fdt);
+	}
+	early_init_devtree(fdt);
 }
 
 static int __init openrisc_device_probe(void)
@@ -268,7 +266,7 @@ void __init detect_unit_config(unsigned long upr, unsigned long mask,
  *
  */
 
-void __cpuinit calibrate_delay(void)
+void calibrate_delay(void)
 {
 	const int *val;
 	struct device_node *cpu = NULL;
@@ -286,15 +284,15 @@ void __init setup_arch(char **cmdline_p)
 {
 	unsigned long max_low_pfn;
 
-	unflatten_device_tree();
+	unflatten_and_copy_device_tree();
 
 	setup_cpuinfo();
 
 	/* process 1's initial memory region is the kernel code/data */
-	init_mm.start_code = (unsigned long)&_stext;
-	init_mm.end_code = (unsigned long)&_etext;
-	init_mm.end_data = (unsigned long)&_edata;
-	init_mm.brk = (unsigned long)&_end;
+	init_mm.start_code = (unsigned long)_stext;
+	init_mm.end_code = (unsigned long)_etext;
+	init_mm.end_data = (unsigned long)_edata;
+	init_mm.brk = (unsigned long)_end;
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	initrd_start = (unsigned long)&__initrd_start;
@@ -317,7 +315,7 @@ void __init setup_arch(char **cmdline_p)
 		conswitchp = &dummy_con;
 #endif
 
-	*cmdline_p = cmd_line;
+	*cmdline_p = boot_command_line;
 
 	printk(KERN_INFO "OpenRISC Linux -- http://openrisc.net\n");
 }
@@ -331,30 +329,32 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 	version = (vr & SPR_VR_VER) >> 24;
 	revision = vr & SPR_VR_REV;
 
-	return seq_printf(m,
-			  "cpu\t\t: OpenRISC-%x\n"
-			  "revision\t: %d\n"
-			  "frequency\t: %ld\n"
-			  "dcache size\t: %d bytes\n"
-			  "dcache block size\t: %d bytes\n"
-			  "icache size\t: %d bytes\n"
-			  "icache block size\t: %d bytes\n"
-			  "immu\t\t: %d entries, %lu ways\n"
-			  "dmmu\t\t: %d entries, %lu ways\n"
-			  "bogomips\t: %lu.%02lu\n",
-			  version,
-			  revision,
-			  loops_per_jiffy * HZ,
-			  cpuinfo.dcache_size,
-			  cpuinfo.dcache_block_size,
-			  cpuinfo.icache_size,
-			  cpuinfo.icache_block_size,
-			  1 << ((mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTS) >> 2),
-			  1 + (mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTW),
-			  1 << ((mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTS) >> 2),
-			  1 + (mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTW),
-			  (loops_per_jiffy * HZ) / 500000,
-			  ((loops_per_jiffy * HZ) / 5000) % 100);
+	seq_printf(m,
+		   "cpu\t\t: OpenRISC-%x\n"
+		   "revision\t: %d\n"
+		   "frequency\t: %ld\n"
+		   "dcache size\t: %d bytes\n"
+		   "dcache block size\t: %d bytes\n"
+		   "icache size\t: %d bytes\n"
+		   "icache block size\t: %d bytes\n"
+		   "immu\t\t: %d entries, %lu ways\n"
+		   "dmmu\t\t: %d entries, %lu ways\n"
+		   "bogomips\t: %lu.%02lu\n",
+		   version,
+		   revision,
+		   loops_per_jiffy * HZ,
+		   cpuinfo.dcache_size,
+		   cpuinfo.dcache_block_size,
+		   cpuinfo.icache_size,
+		   cpuinfo.icache_block_size,
+		   1 << ((mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTS) >> 2),
+		   1 + (mfspr(SPR_DMMUCFGR) & SPR_DMMUCFGR_NTW),
+		   1 << ((mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTS) >> 2),
+		   1 + (mfspr(SPR_IMMUCFGR) & SPR_IMMUCFGR_NTW),
+		   (loops_per_jiffy * HZ) / 500000,
+		   ((loops_per_jiffy * HZ) / 5000) % 100);
+
+	return 0;
 }
 
 static void *c_start(struct seq_file *m, loff_t * pos)

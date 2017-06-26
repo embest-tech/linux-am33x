@@ -10,14 +10,14 @@
 # Copyright (C) 2001~2010 GUAN Xue-tao
 #
 
-EXTRA_CFLAGS	:= -fpic -fno-builtin
-EXTRA_AFLAGS	:= -Wa,-march=all
+ccflags-y	:= -fpic -fno-builtin
+asflags-y	:= -Wa,-march=all
 
 OBJS		:= misc.o
 
 # font.c and font.o
 CFLAGS_font.o	:= -Dstatic=
-$(obj)/font.c: $(srctree)/drivers/video/console/font_8x8.c
+$(obj)/font.c: $(srctree)/lib/fonts/font_8x8.c
 	$(call cmd,shipped)
 
 # piggy.S and piggy.o

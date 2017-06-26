@@ -56,7 +56,7 @@ static const struct dmi_system_id cable_dmi_table[] = {
 		},
 	},
 	{
-		.ident = "Toshiba Satelite S1800-814",
+		.ident = "Toshiba Satellite S1800-814",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "TOSHIBA"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "S1800-814"),
@@ -589,10 +589,10 @@ static int ali_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
 		return ata_pci_bmdma_init_one(pdev, ppi, &ali_sht, NULL, 0);
 }
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 static int ali_reinit_one(struct pci_dev *pdev)
 {
-	struct ata_host *host = dev_get_drvdata(&pdev->dev);
+	struct ata_host *host = pci_get_drvdata(pdev);
 	int rc;
 
 	rc = ata_pci_device_do_resume(pdev);
@@ -616,7 +616,7 @@ static struct pci_driver ali_pci_driver = {
 	.id_table	= ali,
 	.probe 		= ali_init_one,
 	.remove		= ata_pci_remove_one,
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 	.suspend	= ata_pci_device_suspend,
 	.resume		= ali_reinit_one,
 #endif

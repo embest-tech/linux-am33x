@@ -10,7 +10,7 @@
  *      2 of the License, or (at your option) any later version.
  */
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sched.h>
 #include <linux/stacktrace.h>
 #include <asm/ptrace.h>
@@ -50,7 +50,7 @@ void save_stack_trace(struct stack_trace *trace)
 {
 	unsigned long sp;
 
-	asm("mr %0,1" : "=r" (sp));
+	sp = current_stack_pointer();
 
 	save_context_stack(trace, sp, current, 1);
 }

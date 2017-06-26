@@ -10,11 +10,10 @@
 
 #include <linux/etherdevice.h>
 #include <linux/list.h>
-#include <linux/netdevice.h>
 #include <linux/slab.h>
 #include "dsa_priv.h"
 
-netdev_tx_t trailer_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t trailer_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct dsa_slave_priv *p = netdev_priv(dev);
 	struct sk_buff *nskb;
@@ -57,8 +56,6 @@ netdev_tx_t trailer_xmit(struct sk_buff *skb, struct net_device *dev)
 	trailer[1] = 1 << p->port;
 	trailer[2] = 0x10;
 	trailer[3] = 0x00;
-
-	nskb->protocol = htons(ETH_P_TRAILER);
 
 	nskb->dev = p->parent->dst->master_netdev;
 	dev_queue_xmit(nskb);
@@ -114,20 +111,7 @@ out:
 	return 0;
 }
 
-static struct packet_type trailer_packet_type __read_mostly = {
-	.type	= cpu_to_be16(ETH_P_TRAILER),
-	.func	= trailer_rcv,
+const struct dsa_device_ops trailer_netdev_ops = {
+	.xmit	= trailer_xmit,
+	.rcv	= trailer_rcv,
 };
-
-static int __init trailer_init_module(void)
-{
-	dev_add_pack(&trailer_packet_type);
-	return 0;
-}
-module_init(trailer_init_module);
-
-static void __exit trailer_cleanup_module(void)
-{
-	dev_remove_pack(&trailer_packet_type);
-}
-module_exit(trailer_cleanup_module);

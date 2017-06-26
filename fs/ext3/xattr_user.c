@@ -5,11 +5,7 @@
  * Copyright (C) 2001 by Andreas Gruenbacher, <a.gruenbacher@computer.org>
  */
 
-#include <linux/module.h>
-#include <linux/string.h>
-#include <linux/fs.h>
-#include <linux/ext3_jbd.h>
-#include <linux/ext3_fs.h>
+#include "ext3.h"
 #include "xattr.h"
 
 static size_t
@@ -38,7 +34,7 @@ ext3_xattr_user_get(struct dentry *dentry, const char *name, void *buffer,
 		return -EINVAL;
 	if (!test_opt(dentry->d_sb, XATTR_USER))
 		return -EOPNOTSUPP;
-	return ext3_xattr_get(dentry->d_inode, EXT3_XATTR_INDEX_USER,
+	return ext3_xattr_get(d_inode(dentry), EXT3_XATTR_INDEX_USER,
 			      name, buffer, size);
 }
 
@@ -50,7 +46,7 @@ ext3_xattr_user_set(struct dentry *dentry, const char *name,
 		return -EINVAL;
 	if (!test_opt(dentry->d_sb, XATTR_USER))
 		return -EOPNOTSUPP;
-	return ext3_xattr_set(dentry->d_inode, EXT3_XATTR_INDEX_USER,
+	return ext3_xattr_set(d_inode(dentry), EXT3_XATTR_INDEX_USER,
 			      name, value, size, flags);
 }
 

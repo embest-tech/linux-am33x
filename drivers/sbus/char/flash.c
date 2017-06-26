@@ -9,14 +9,12 @@
 #include <linux/miscdevice.h>
 #include <linux/fcntl.h>
 #include <linux/poll.h>
-#include <linux/init.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/mm.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
@@ -160,7 +158,7 @@ static const struct file_operations flash_fops = {
 
 static struct miscdevice flash_dev = { FLASH_MINOR, "flash", &flash_fops };
 
-static int __devinit flash_probe(struct platform_device *op)
+static int flash_probe(struct platform_device *op)
 {
 	struct device_node *dp = op->dev.of_node;
 	struct device_node *parent;
@@ -191,7 +189,7 @@ static int __devinit flash_probe(struct platform_device *op)
 	return misc_register(&flash_dev);
 }
 
-static int __devexit flash_remove(struct platform_device *op)
+static int flash_remove(struct platform_device *op)
 {
 	misc_deregister(&flash_dev);
 
@@ -209,23 +207,12 @@ MODULE_DEVICE_TABLE(of, flash_match);
 static struct platform_driver flash_driver = {
 	.driver = {
 		.name = "flash",
-		.owner = THIS_MODULE,
 		.of_match_table = flash_match,
 	},
 	.probe		= flash_probe,
-	.remove		= __devexit_p(flash_remove),
+	.remove		= flash_remove,
 };
 
-static int __init flash_init(void)
-{
-	return platform_driver_register(&flash_driver);
-}
+module_platform_driver(flash_driver);
 
-static void __exit flash_cleanup(void)
-{
-	platform_driver_unregister(&flash_driver);
-}
-
-module_init(flash_init);
-module_exit(flash_cleanup);
 MODULE_LICENSE("GPL");

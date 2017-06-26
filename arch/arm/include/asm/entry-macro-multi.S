@@ -25,13 +25,6 @@
 	movne	r1, sp
 	adrne	lr, BSYM(1b)
 	bne	do_IPI
-
-#ifdef CONFIG_LOCAL_TIMERS
-	test_for_ltirq r0, r2, r6, lr
-	movne	r0, sp
-	adrne	lr, BSYM(1b)
-	bne	do_local_timer
-#endif
 #endif
 9997:
 	.endm
@@ -42,5 +35,5 @@
 \symbol_name:
 	mov	r8, lr
 	arch_irq_handler_default
-	mov     pc, r8
+	ret	r8
 	.endm

@@ -39,13 +39,15 @@
 #include <linux/list.h>
 #include <linux/interrupt.h>
 #include <linux/errno.h>
-#include <linux/clk.h>
+#include <linux/timer.h>
 #include <linux/device.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb.h>
 #include <linux/usb/otg.h>
 #include <linux/usb/musb.h>
+#include <linux/phy/phy.h>
+#include <linux/workqueue.h>
 
 struct musb;
 struct musb_hw_ep;
@@ -61,9 +63,6 @@ struct musb_ep;
 #define MUSB_HWVERS_1900	0x784
 #define MUSB_HWVERS_2000	0x800
 
-extern u8 (*musb_readb)(const void __iomem *addr, unsigned offset);
-extern void (*musb_writeb)(void __iomem *addr, unsigned offset, u8 data);
-
 #include "musb_debug.h"
 #include "musb_dma.h"
 
@@ -74,49 +73,17 @@ extern void (*musb_writeb)(void __iomem *addr, unsigned offset, u8 data);
 #include <linux/usb/hcd.h>
 #include "musb_host.h"
 
-#define	is_peripheral_enabled(musb)	((musb)->board_mode != MUSB_HOST)
-#define	is_host_enabled(musb)		((musb)->board_mode != MUSB_PERIPHERAL)
-#define	is_otg_enabled(musb)		((musb)->board_mode == MUSB_OTG)
-
 /* NOTE:  otg and peripheral-only state machines start at B_IDLE.
  * OTG or host-only go to A_IDLE when ID is sensed.
  */
 #define is_peripheral_active(m)		(!(m)->is_host)
 #define is_host_active(m)		((m)->is_host)
 
-#ifndef CONFIG_HAVE_CLK
-/* Dummy stub for clk framework */
-#define clk_get(dev, id)	NULL
-#define clk_put(clock)		do {} while (0)
-#define clk_enable(clock)	do {} while (0)
-#define clk_disable(clock)	do {} while (0)
-#endif
-
-#ifdef CONFIG_PROC_FS
-#include <linux/fs.h>
-#define MUSB_CONFIG_PROC_FS
-#endif
-
-/****************************** PERIPHERAL ROLE *****************************/
-
-#define	is_peripheral_capable()	(1)
-
-extern irqreturn_t musb_g_ep0_irq(struct musb *);
-extern void musb_g_tx(struct musb *, u8);
-extern void musb_g_rx(struct musb *, u8);
-extern void musb_g_reset(struct musb *);
-extern void musb_g_suspend(struct musb *);
-extern void musb_g_resume(struct musb *);
-extern void musb_g_wakeup(struct musb *);
-extern void musb_g_disconnect(struct musb *);
-
-/****************************** HOST ROLE ***********************************/
-
-#define	is_host_capable()	(1)
-
-extern irqreturn_t musb_h_ep0_irq(struct musb *);
-extern void musb_host_tx(struct musb *, u8);
-extern void musb_host_rx(struct musb *, u8);
+enum {
+	MUSB_PORT_MODE_HOST	= 1,
+	MUSB_PORT_MODE_GADGET,
+	MUSB_PORT_MODE_DUAL_ROLE,
+};
 
 /****************************** CONSTANTS ********************************/
 
@@ -148,23 +115,15 @@ enum musb_g_ep0_state {
 	MUSB_EP0_STAGE_ACKWAIT,		/* after zlp, before statusin */
 } __attribute__ ((packed));
 
-/* OTG protocol constants */
-#define OTG_TIME_A_WAIT_VRISE	100		/* msec (max) */
-#define OTG_TIME_A_WAIT_BCON	0		/* 0=infinite; min 1000 msec */
-#define OTG_TIME_A_IDLE_BDIS	200		/* msec (min) */
-
-/*************************** REGISTER ACCESS ********************************/
-
-/* Endpoint registers (other than dynfifo setup) can be accessed either
- * directly with the "flat" model, or after setting up an index register.
+/*
+ * OTG protocol constants.  See USB OTG 1.3 spec,
+ * sections 5.5 "Device Timings" and 6.6.5 "Timers".
  */
+#define OTG_TIME_A_WAIT_VRISE	100		/* msec (max) */
+#define OTG_TIME_A_WAIT_BCON	1100		/* min 1 second */
+#define OTG_TIME_A_AIDL_BDIS	200		/* min 200 msec */
+#define OTG_TIME_B_ASE0_BRST	100		/* min 3.125 ms */
 
-#define musb_ep_select(_musb, _mbase, _epnum) do { \
-	if (_musb->ops->flags & MUSB_GLUE_EP_ADDR_INDEXED_MAPPING) \
-		musb_writeb((_mbase), MUSB_INDEX, (_epnum)); \
- } while (0)
-
-#define	MUSB_EP_OFFSET	MUSB_OFFSET
 /****************************** FUNCTIONS ********************************/
 
 #define MUSB_HST_MODE(_musb)\
@@ -179,49 +138,66 @@ enum musb_g_ep0_state {
 
 /******************************** TYPES *************************************/
 
-#define     MUSB_GLUE_TUSB_STYLE   0x0001
-#define     MUSB_GLUE_EP_ADDR_FLAT_MAPPING	0x0002
-#define     MUSB_GLUE_EP_ADDR_INDEXED_MAPPING	0x0004
-#define		MUSB_GLUE_DMA_INVENTRA				0x0008
-#define		MUSB_GLUE_DMA_CPPI					0x0010
-#define		MUSB_GLUE_DMA_TUSB					0x0020
-#define		MUSB_GLUE_DMA_UX500					0x0040
-#define		MUSB_GLUE_DMA_CPPI41					0x0080
-
+struct musb_io;
 
 /**
  * struct musb_platform_ops - Operations passed to musb_core by HW glue layer
- * @fifo_mode: which fifo_mode is taken by me
- * @flags:	each hw glue difference information will be here
+ * @quirks:	flags for platform specific quirks
+ * @enable:	enable device
+ * @disable:	disable device
+ * @ep_offset:	returns the end point offset
+ * @ep_select:	selects the specified end point
+ * @fifo_mode:	sets the fifo mode
+ * @fifo_offset: returns the fifo offset
+ * @readb:	read 8 bits
+ * @writeb:	write 8 bits
+ * @readw:	read 16 bits
+ * @writew:	write 16 bits
+ * @readl:	read 32 bits
+ * @writel:	write 32 bits
+ * @read_fifo:	reads the fifo
+ * @write_fifo:	writes to fifo
  * @init:	turns on clocks, sets up platform-specific registers, etc
  * @exit:	undoes @init
- * @read_fifo: read data from musb fifo in PIO
- * @write_fifo: write data into musb fifo in PIO
  * @set_mode:	forcefully changes operating mode
- * @try_ilde:	tries to idle the IP
- * @get_hw_revision: get hardware revision
+ * @try_idle:	tries to idle the IP
+ * @recover:	platform-specific babble recovery
  * @vbus_status: returns vbus status if possible
  * @set_vbus:	forces vbus status
  * @adjust_channel_params: pre check for standard dma channel_program func
- * @dma_controller_create: create dma controller for me
- * @dma_controller_destroy: destroy dma controller
  */
 struct musb_platform_ops {
-	short	fifo_mode;
-	unsigned short	flags;
+
+#define MUSB_DMA_UX500		BIT(6)
+#define MUSB_DMA_CPPI41		BIT(5)
+#define MUSB_DMA_CPPI		BIT(4)
+#define MUSB_DMA_TUSB_OMAP	BIT(3)
+#define MUSB_DMA_INVENTRA	BIT(2)
+#define MUSB_IN_TUSB		BIT(1)
+#define MUSB_INDEXED_EP		BIT(0)
+	u32	quirks;
+
 	int	(*init)(struct musb *musb);
 	int	(*exit)(struct musb *musb);
 
 	void	(*enable)(struct musb *musb);
 	void	(*disable)(struct musb *musb);
 
-	void (*read_fifo)(struct musb_hw_ep *hw_ep, u16 len, u8 *buf);
-	void (*write_fifo)(struct musb_hw_ep *hw_ep, u16 len, const u8 *buf);
-
+	u32	(*ep_offset)(u8 epnum, u16 offset);
+	void	(*ep_select)(void __iomem *mbase, u8 epnum);
+	u16	fifo_mode;
+	u32	(*fifo_offset)(u8 epnum);
+	u8	(*readb)(const void __iomem *addr, unsigned offset);
+	void	(*writeb)(void __iomem *addr, unsigned offset, u8 data);
+	u16	(*readw)(const void __iomem *addr, unsigned offset);
+	void	(*writew)(void __iomem *addr, unsigned offset, u16 data);
+	u32	(*readl)(const void __iomem *addr, unsigned offset);
+	void	(*writel)(void __iomem *addr, unsigned offset, u32 data);
+	void	(*read_fifo)(struct musb_hw_ep *hw_ep, u16 len, u8 *buf);
+	void	(*write_fifo)(struct musb_hw_ep *hw_ep, u16 len, const u8 *buf);
 	int	(*set_mode)(struct musb *musb, u8 mode);
 	void	(*try_idle)(struct musb *musb, unsigned long timeout);
-
-	u16  (*get_hw_revision)(struct musb *musb);
+	int	(*recover)(struct musb *musb);
 
 	int	(*vbus_status)(struct musb *musb);
 	void	(*set_vbus)(struct musb *musb, int on);
@@ -229,10 +205,6 @@ struct musb_platform_ops {
 	int	(*adjust_channel_params)(struct dma_channel *channel,
 				u16 packet_sz, u8 *mode,
 				dma_addr_t *dma_addr, u32 *len);
-	struct dma_controller* (*dma_controller_create)(struct musb *,
-		void __iomem *);
-	void (*dma_controller_destroy)(struct dma_controller *);
-	int (*simulate_babble_intr)(struct musb *musb);
 };
 
 /*
@@ -245,8 +217,9 @@ struct musb_hw_ep {
 	void __iomem		*fifo;
 	void __iomem		*regs;
 
-	/*Fixme: the following field is only used by tusb*/
+#if IS_ENABLED(CONFIG_USB_MUSB_TUSB6010)
 	void __iomem		*conf;
+#endif
 
 	/* index in musb->endpoints[]  */
 	u8			epnum;
@@ -261,13 +234,12 @@ struct musb_hw_ep {
 	struct dma_channel	*tx_channel;
 	struct dma_channel	*rx_channel;
 
-	/*
-	 * TUSB has "asynchronous" and "synchronous" dma modes
-	 * Fixme: the following three fields are only valid for TUSB.
-	 * */
+#if IS_ENABLED(CONFIG_USB_MUSB_TUSB6010)
+	/* TUSB has "asynchronous" and "synchronous" dma modes */
 	dma_addr_t		fifo_async;
 	dma_addr_t		fifo_sync;
 	void __iomem		*fifo_sync_va;
+#endif
 
 	void __iomem		*target_regs;
 
@@ -306,12 +278,12 @@ struct musb_csr_regs {
 struct musb_context_registers {
 
 	u8 power;
-	u16 intrtxe, intrrxe;
 	u8 intrusbe;
 	u16 frame;
 	u8 index, testmode;
 
 	u8 devctl, busctl, misc;
+	u32 otg_interfsel;
 
 	struct musb_csr_regs index_regs[MUSB_C_NUM_EPS];
 };
@@ -323,15 +295,18 @@ struct musb {
 	/* device lock */
 	spinlock_t		lock;
 
+	struct musb_io		io;
 	const struct musb_platform_ops *ops;
 	struct musb_context_registers context;
 
 	irqreturn_t		(*isr)(int, void *);
 	struct work_struct	irq_work;
-	struct work_struct	work;
-	u8			enable_babble_work;
+	struct delayed_work	deassert_reset_work;
+	struct delayed_work	finish_resume_work;
 	u16			hwvers;
 
+	u16			intrrxe;
+	u16			intrtxe;
 /* this hub status bit is reserved by USB 2.0 and not seen by usbcore */
 #define MUSB_PORT_STAT_RESUME	(1 << 31)
 
@@ -353,31 +328,29 @@ struct musb {
 	struct list_head	in_bulk;	/* of musb_qh */
 	struct list_head	out_bulk;	/* of musb_qh */
 
-	struct workqueue_struct *gb_queue;
-	struct work_struct      gb_work;
-	spinlock_t              gb_lock;
-	struct list_head        gb_list;        /* of urbs */
-
+	struct timer_list	otg_timer;
 	struct notifier_block	nb;
 
 	struct dma_controller	*dma_controller;
 
 	struct device		*controller;
 	void __iomem		*ctrl_base;
-	phys_addr_t		ctrl_phys_base;
 	void __iomem		*mregs;
 
-	/*Fixme: the three fields below are only used by tusb*/
+#if IS_ENABLED(CONFIG_USB_MUSB_TUSB6010)
 	dma_addr_t		async;
 	dma_addr_t		sync;
 	void __iomem		*sync_va;
+	u8			tusb_revision;
+#endif
 
 	/* passed down from chip/board specific irq handlers */
 	u8			int_usb;
 	u16			int_rx;
 	u16			int_tx;
 
-	struct otg_transceiver	*xceiv;
+	struct usb_phy		*xceiv;
+	struct phy		*phy;
 
 	int nIrq;
 	unsigned		irq_wake:1;
@@ -390,11 +363,11 @@ struct musb {
 	u16 epmask;
 	u8 nr_endpoints;
 
-	u8 board_mode;		/* enum musb_mode */
 	int			(*board_set_power)(int state);
 
 	u8			min_power;	/* vbus for periph, in mA/2 */
 
+	int			port_mode;	/* MUSB_PORT_MODE_* */
 	bool			is_host;
 
 	int			a_wait_bcon;	/* VBUS timeout in msecs */
@@ -404,7 +377,6 @@ struct musb {
 	unsigned		is_active:1;
 
 	unsigned is_multipoint:1;
-	unsigned ignore_disconnect:1;	/* during bus resets */
 
 	unsigned		hb_iso_rx:1;	/* high bandwidth iso rx? */
 	unsigned		hb_iso_tx:1;	/* high bandwidth iso tx? */
@@ -420,6 +392,7 @@ struct musb {
 
 	/* is_suspended means USB B_PERIPHERAL suspend */
 	unsigned		is_suspended:1;
+	unsigned		need_finish_resume :1;
 
 	/* may_wakeup means remote wakeup is enabled */
 	unsigned		may_wakeup:1;
@@ -441,6 +414,7 @@ struct musb {
 	enum musb_g_ep0_state	ep0_state;
 	struct usb_gadget	g;			/* the gadget */
 	struct usb_gadget_driver *gadget_driver;	/* its driver */
+	struct usb_hcd		*hcd;			/* the usb hcd */
 
 	/*
 	 * FIXME: Remove this flag.
@@ -453,24 +427,14 @@ struct musb {
 	 * We added this flag to forcefully disable double
 	 * buffering until we get it working.
 	 */
-	unsigned                double_buffer_not_ok:1 __deprecated;
+	unsigned                double_buffer_not_ok:1;
 
 	struct musb_hdrc_config	*config;
 
-#ifdef MUSB_CONFIG_PROC_FS
-	struct proc_dir_entry *proc_entry;
+	int			xceiv_old_state;
+#ifdef CONFIG_DEBUG_FS
+	struct dentry		*debugfs_root;
 #endif
-	/* id for multiple musb instances */
-	u8			id;
-	struct	timer_list	otg_workaround;
-	unsigned long		last_timer;
-	int			first;
-	int			old_state;
-	struct	timer_list	otg_timer;
-#ifndef CONFIG_MUSB_PIO_ONLY
-	u64			*orig_dma_mask;
-#endif
-	short			fifo_mode;
 };
 
 static inline struct musb *gadget_to_musb(struct usb_gadget *g)
@@ -509,11 +473,11 @@ static inline void musb_configure_ep0(struct musb *musb)
 static inline int musb_read_fifosize(struct musb *musb,
 		struct musb_hw_ep *hw_ep, u8 epnum)
 {
-	void *mbase = musb->mregs;
+	void __iomem *mbase = musb->mregs;
 	u8 reg = 0;
 
 	/* read from core using indexed model */
-	reg = musb_readb(mbase, MUSB_EP_OFFSET(musb, epnum, MUSB_FIFOSIZE));
+	reg = musb_readb(mbase, musb->io.ep_offset(epnum, MUSB_FIFOSIZE));
 	/* 0's returned when no more endpoints */
 	if (!reg)
 		return -ENODEV;
@@ -549,8 +513,8 @@ static inline void musb_configure_ep0(struct musb *musb)
 
 extern const char musb_driver_name[];
 
-extern void musb_start(struct musb *musb);
 extern void musb_stop(struct musb *musb);
+extern void musb_start(struct musb *musb);
 
 extern void musb_write_fifo(struct musb_hw_ep *ep, u16 len, const u8 *src);
 extern void musb_read_fifo(struct musb_hw_ep *ep, u16 len, u8 *dst);
@@ -560,9 +524,6 @@ extern void musb_load_testpacket(struct musb *);
 extern irqreturn_t musb_interrupt(struct musb *);
 
 extern void musb_hnp_stop(struct musb *musb);
-
-extern void musb_restore_context(struct musb *musb);
-extern void musb_save_context(struct musb *musb);
 
 static inline void musb_platform_set_vbus(struct musb *musb, int is_on)
 {
@@ -597,6 +558,14 @@ static inline void musb_platform_try_idle(struct musb *musb,
 		musb->ops->try_idle(musb, timeout);
 }
 
+static inline int  musb_platform_recover(struct musb *musb)
+{
+	if (!musb->ops->recover)
+		return 0;
+
+	return musb->ops->recover(musb);
+}
+
 static inline int musb_platform_get_vbus_status(struct musb *musb)
 {
 	if (!musb->ops->vbus_status)
@@ -621,45 +590,4 @@ static inline int musb_platform_exit(struct musb *musb)
 	return musb->ops->exit(musb);
 }
 
-static inline u16 musb_platform_get_hw_revision(struct musb *musb)
-{
-	if (!musb->ops->get_hw_revision)
-		return musb_readw(musb->mregs, MUSB_HWVERS);
-
-	return musb->ops->get_hw_revision(musb);
-}
-
-static inline int musb_simulate_babble_intr(struct musb *musb)
-{
-	if (!musb->ops->simulate_babble_intr)
-		return -EINVAL;
-
-	return musb->ops->simulate_babble_intr(musb);
-}
-
-static inline const char *get_dma_name(struct musb *musb)
-{
-#ifdef CONFIG_MUSB_PIO_ONLY
-	return "pio";
-#else
-	if (musb->ops->flags & MUSB_GLUE_DMA_INVENTRA)
-		return "dma-inventra";
-	else if (musb->ops->flags & MUSB_GLUE_DMA_CPPI)
-		return "dma-cppi3";
-	else if (musb->ops->flags & MUSB_GLUE_DMA_CPPI41)
-		return "dma-cppi41";
-	else if (musb->ops->flags & MUSB_GLUE_DMA_TUSB)
-		return "dma-tusb-omap";
-	else
-		return "?dma?";
-#endif
-}
-
-extern void musb_gb_work(struct work_struct *data);
-/*-------------------------- ProcFS definitions ---------------------*/
-
-struct proc_dir_entry;
-
-extern struct proc_dir_entry *musb_debug_create(char *name, struct musb *data);
-extern void musb_debug_delete(char *name, struct musb *data);
 #endif	/* __MUSB_CORE_H__ */

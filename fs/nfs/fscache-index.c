@@ -74,10 +74,9 @@ static uint16_t nfs_server_get_key(const void *cookie_netfs_data,
 	struct nfs_server_key *key = buffer;
 	uint16_t len = sizeof(struct nfs_server_key);
 
+	memset(key, 0, len);
 	key->nfsversion = clp->rpc_ops->version;
 	key->family = clp->cl_addr.ss_family;
-
-	memset(key, 0, len);
 
 	switch (clp->cl_addr.ss_family) {
 	case AF_INET:
@@ -212,7 +211,7 @@ static uint16_t nfs_fscache_inode_get_aux(const void *cookie_netfs_data,
 	auxdata.ctime = nfsi->vfs_inode.i_ctime;
 
 	if (NFS_SERVER(&nfsi->vfs_inode)->nfs_client->rpc_ops->version == 4)
-		auxdata.change_attr = nfsi->change_attr;
+		auxdata.change_attr = nfsi->vfs_inode.i_version;
 
 	if (bufmax > sizeof(auxdata))
 		bufmax = sizeof(auxdata);
@@ -244,7 +243,7 @@ enum fscache_checkaux nfs_fscache_inode_check_aux(void *cookie_netfs_data,
 	auxdata.ctime = nfsi->vfs_inode.i_ctime;
 
 	if (NFS_SERVER(&nfsi->vfs_inode)->nfs_client->rpc_ops->version == 4)
-		auxdata.change_attr = nfsi->change_attr;
+		auxdata.change_attr = nfsi->vfs_inode.i_version;
 
 	if (memcmp(data, &auxdata, datalen) != 0)
 		return FSCACHE_CHECKAUX_OBSOLETE;

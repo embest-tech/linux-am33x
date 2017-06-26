@@ -55,9 +55,6 @@
 static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node);
 
 static int dlm_recovery_thread(void *data);
-void dlm_complete_recovery_thread(struct dlm_ctxt *dlm);
-int dlm_launch_recovery_thread(struct dlm_ctxt *dlm);
-void dlm_kick_recovery_thread(struct dlm_ctxt *dlm);
 static int dlm_do_recovery(struct dlm_ctxt *dlm);
 
 static int dlm_pick_recovery_master(struct dlm_ctxt *dlm);
@@ -362,40 +359,38 @@ static int dlm_is_node_recovered(struct dlm_ctxt *dlm, u8 node)
 }
 
 
-int dlm_wait_for_node_death(struct dlm_ctxt *dlm, u8 node, int timeout)
+void dlm_wait_for_node_death(struct dlm_ctxt *dlm, u8 node, int timeout)
 {
-	if (timeout) {
-		mlog(ML_NOTICE, "%s: waiting %dms for notification of "
-		     "death of node %u\n", dlm->name, timeout, node);
+	if (dlm_is_node_dead(dlm, node))
+		return;
+
+	printk(KERN_NOTICE "o2dlm: Waiting on the death of node %u in "
+	       "domain %s\n", node, dlm->name);
+
+	if (timeout)
 		wait_event_timeout(dlm->dlm_reco_thread_wq,
-			   dlm_is_node_dead(dlm, node),
-			   msecs_to_jiffies(timeout));
-	} else {
-		mlog(ML_NOTICE, "%s: waiting indefinitely for notification "
-		     "of death of node %u\n", dlm->name, node);
+				   dlm_is_node_dead(dlm, node),
+				   msecs_to_jiffies(timeout));
+	else
 		wait_event(dlm->dlm_reco_thread_wq,
 			   dlm_is_node_dead(dlm, node));
-	}
-	/* for now, return 0 */
-	return 0;
 }
 
-int dlm_wait_for_node_recovery(struct dlm_ctxt *dlm, u8 node, int timeout)
+void dlm_wait_for_node_recovery(struct dlm_ctxt *dlm, u8 node, int timeout)
 {
-	if (timeout) {
-		mlog(0, "%s: waiting %dms for notification of "
-		     "recovery of node %u\n", dlm->name, timeout, node);
+	if (dlm_is_node_recovered(dlm, node))
+		return;
+
+	printk(KERN_NOTICE "o2dlm: Waiting on the recovery of node %u in "
+	       "domain %s\n", node, dlm->name);
+
+	if (timeout)
 		wait_event_timeout(dlm->dlm_reco_thread_wq,
-			   dlm_is_node_recovered(dlm, node),
-			   msecs_to_jiffies(timeout));
-	} else {
-		mlog(0, "%s: waiting indefinitely for notification "
-		     "of recovery of node %u\n", dlm->name, node);
+				   dlm_is_node_recovered(dlm, node),
+				   msecs_to_jiffies(timeout));
+	else
 		wait_event(dlm->dlm_reco_thread_wq,
 			   dlm_is_node_recovered(dlm, node));
-	}
-	/* for now, return 0 */
-	return 0;
 }
 
 /* callers of the top-level api calls (dlmlock/dlmunlock) should
@@ -430,6 +425,8 @@ static void dlm_begin_recovery(struct dlm_ctxt *dlm)
 {
 	spin_lock(&dlm->spinlock);
 	BUG_ON(dlm->reco.state & DLM_RECO_STATE_ACTIVE);
+	printk(KERN_NOTICE "o2dlm: Begin recovery on domain %s for node %u\n",
+	       dlm->name, dlm->reco.dead_node);
 	dlm->reco.state |= DLM_RECO_STATE_ACTIVE;
 	spin_unlock(&dlm->spinlock);
 }
@@ -440,7 +437,16 @@ static void dlm_end_recovery(struct dlm_ctxt *dlm)
 	BUG_ON(!(dlm->reco.state & DLM_RECO_STATE_ACTIVE));
 	dlm->reco.state &= ~DLM_RECO_STATE_ACTIVE;
 	spin_unlock(&dlm->spinlock);
+	printk(KERN_NOTICE "o2dlm: End recovery on domain %s\n", dlm->name);
 	wake_up(&dlm->reco.event);
+}
+
+static void dlm_print_recovery_master(struct dlm_ctxt *dlm)
+{
+	printk(KERN_NOTICE "o2dlm: Node %u (%s) is the Recovery Master for the "
+	       "dead node %u in domain %s\n", dlm->reco.new_master,
+	       (dlm->node_num == dlm->reco.new_master ? "me" : "he"),
+	       dlm->reco.dead_node, dlm->name);
 }
 
 static int dlm_do_recovery(struct dlm_ctxt *dlm)
@@ -505,9 +511,8 @@ static int dlm_do_recovery(struct dlm_ctxt *dlm)
 		}
 		mlog(0, "another node will master this recovery session.\n");
 	}
-	mlog(0, "dlm=%s (%d), new_master=%u, this node=%u, dead_node=%u\n",
-	     dlm->name, task_pid_nr(dlm->dlm_reco_thread_task), dlm->reco.new_master,
-	     dlm->node_num, dlm->reco.dead_node);
+
+	dlm_print_recovery_master(dlm);
 
 	/* it is safe to start everything back up here
 	 * because all of the dead node's lock resources
@@ -518,15 +523,13 @@ static int dlm_do_recovery(struct dlm_ctxt *dlm)
 	return 0;
 
 master_here:
-	mlog(ML_NOTICE, "(%d) Node %u is the Recovery Master for the Dead Node "
-	     "%u for Domain %s\n", task_pid_nr(dlm->dlm_reco_thread_task),
-	     dlm->node_num, dlm->reco.dead_node, dlm->name);
+	dlm_print_recovery_master(dlm);
 
 	status = dlm_remaster_locks(dlm, dlm->reco.dead_node);
 	if (status < 0) {
 		/* we should never hit this anymore */
-		mlog(ML_ERROR, "error %d remastering locks for node %u, "
-		     "retrying.\n", status, dlm->reco.dead_node);
+		mlog(ML_ERROR, "%s: Error %d remastering locks for node %u, "
+		     "retrying.\n", dlm->name, status, dlm->reco.dead_node);
 		/* yield a bit to allow any final network messages
 		 * to get handled on remaining nodes */
 		msleep(100);
@@ -534,7 +537,10 @@ master_here:
 		/* success!  see if any other nodes need recovery */
 		mlog(0, "DONE mastering recovery of %s:%u here(this=%u)!\n",
 		     dlm->name, dlm->reco.dead_node, dlm->node_num);
-		dlm_reset_recovery(dlm);
+		spin_lock(&dlm->spinlock);
+		__dlm_reset_recovery(dlm);
+		dlm->reco.state &= ~DLM_RECO_STATE_FINALIZE;
+		spin_unlock(&dlm->spinlock);
 	}
 	dlm_end_recovery(dlm);
 
@@ -567,7 +573,7 @@ static int dlm_remaster_locks(struct dlm_ctxt *dlm, u8 dead_node)
 		BUG_ON(ndata->state != DLM_RECO_NODE_DATA_INIT);
 		ndata->state = DLM_RECO_NODE_DATA_REQUESTING;
 
-		mlog(0, "requesting lock info from node %u\n",
+		mlog(0, "%s: Requesting lock info from node %u\n", dlm->name,
 		     ndata->node_num);
 
 		if (ndata->node_num == dlm->node_num) {
@@ -640,7 +646,7 @@ static int dlm_remaster_locks(struct dlm_ctxt *dlm, u8 dead_node)
 		spin_unlock(&dlm_reco_state_lock);
 	}
 
-	mlog(0, "done requesting all lock info\n");
+	mlog(0, "%s: Done requesting all lock info\n", dlm->name);
 
 	/* nodes should be sending reco data now
 	 * just need to wait */
@@ -691,6 +697,14 @@ static int dlm_remaster_locks(struct dlm_ctxt *dlm, u8 dead_node)
 		     all_nodes_done?"yes":"no");
 		if (all_nodes_done) {
 			int ret;
+
+			/* Set this flag on recovery master to avoid
+			 * a new recovery for another dead node start
+			 * before the recovery is not done. That may
+			 * cause recovery hung.*/
+			spin_lock(&dlm->spinlock);
+			dlm->reco.state |= DLM_RECO_STATE_FINALIZE;
+			spin_unlock(&dlm->spinlock);
 
 			/* all nodes are now in DLM_RECO_NODE_DATA_DONE state
 	 		 * just send a finalize message to everyone and
@@ -783,7 +797,8 @@ static int dlm_request_all_locks(struct dlm_ctxt *dlm, u8 request_from,
 				 u8 dead_node)
 {
 	struct dlm_lock_request lr;
-	enum dlm_status ret;
+	int ret;
+	int status;
 
 	mlog(0, "\n");
 
@@ -796,16 +811,16 @@ static int dlm_request_all_locks(struct dlm_ctxt *dlm, u8 request_from,
 	lr.dead_node = dead_node;
 
 	// send message
-	ret = DLM_NOLOCKMGR;
 	ret = o2net_send_message(DLM_LOCK_REQUEST_MSG, dlm->key,
-				 &lr, sizeof(lr), request_from, NULL);
+				 &lr, sizeof(lr), request_from, &status);
 
 	/* negative status is handled by caller */
 	if (ret < 0)
-		mlog(ML_ERROR, "Error %d when sending message %u (key "
-		     "0x%x) to node %u\n", ret, DLM_LOCK_REQUEST_MSG,
-		     dlm->key, request_from);
-
+		mlog(ML_ERROR, "%s: Error %d send LOCK_REQUEST to node %u "
+		     "to recover dead node %u\n", dlm->name, ret,
+		     request_from, dead_node);
+	else
+		ret = status;
 	// return from here, then
 	// sleep until all received or error
 	return ret;
@@ -956,9 +971,9 @@ static int dlm_send_all_done_msg(struct dlm_ctxt *dlm, u8 dead_node, u8 send_to)
 	ret = o2net_send_message(DLM_RECO_DATA_DONE_MSG, dlm->key, &done_msg,
 				 sizeof(done_msg), send_to, &tmpret);
 	if (ret < 0) {
-		mlog(ML_ERROR, "Error %d when sending message %u (key "
-		     "0x%x) to node %u\n", ret, DLM_RECO_DATA_DONE_MSG,
-		     dlm->key, send_to);
+		mlog(ML_ERROR, "%s: Error %d send RECO_DATA_DONE to node %u "
+		     "to recover dead node %u\n", dlm->name, ret, send_to,
+		     dead_node);
 		if (!dlm_is_host_down(ret)) {
 			BUG();
 		}
@@ -1055,6 +1070,9 @@ static void dlm_move_reco_locks_to_list(struct dlm_ctxt *dlm,
 					     dead_node, dlm->name);
 					list_del_init(&lock->list);
 					dlm_lock_put(lock);
+					/* Can't schedule DLM_UNLOCK_FREE_LOCK
+					 * - do manually */
+					dlm_lock_put(lock);
 					break;
 				}
 			}
@@ -1127,9 +1145,11 @@ static int dlm_send_mig_lockres_msg(struct dlm_ctxt *dlm,
 	if (ret < 0) {
 		/* XXX: negative status is not handled.
 		 * this will end up killing this node. */
-		mlog(ML_ERROR, "Error %d when sending message %u (key "
-		     "0x%x) to node %u\n", ret, DLM_MIG_LOCKRES_MSG,
-		     dlm->key, send_to);
+		mlog(ML_ERROR, "%s: res %.*s, Error %d send MIG_LOCKRES to "
+		     "node %u (%s)\n", dlm->name, mres->lockname_len,
+		     mres->lockname, ret, send_to,
+		     (orig_flags & DLM_MRES_MIGRATION ?
+		      "migration" : "recovery"));
 	} else {
 		/* might get an -ENOMEM back here */
 		ret = status;
@@ -1401,6 +1421,7 @@ int dlm_mig_lockres_handler(struct o2net_msg *msg, u32 len, void *data,
 				     mres->lockname_len, mres->lockname);
 				ret = -EFAULT;
 				spin_unlock(&res->spinlock);
+				dlm_lockres_put(res);
 				goto leave;
 			}
 			res->state |= DLM_LOCK_RES_MIGRATING;
@@ -1491,10 +1512,8 @@ leave:
 
 	dlm_put(dlm);
 	if (ret < 0) {
-		if (buf)
-			kfree(buf);
-		if (item)
-			kfree(item);
+		kfree(buf);
+		kfree(item);
 		mlog_errno(ret);
 	}
 
@@ -1640,14 +1659,18 @@ int dlm_do_master_requery(struct dlm_ctxt *dlm, struct dlm_lock_resource *res,
 	req.namelen = res->lockname.len;
 	memcpy(req.name, res->lockname.name, res->lockname.len);
 
+resend:
 	ret = o2net_send_message(DLM_MASTER_REQUERY_MSG, dlm->key,
 				 &req, sizeof(req), nodenum, &status);
-	/* XXX: negative status not handled properly here. */
 	if (ret < 0)
 		mlog(ML_ERROR, "Error %d when sending message %u (key "
 		     "0x%x) to node %u\n", ret, DLM_MASTER_REQUERY_MSG,
 		     dlm->key, nodenum);
-	else {
+	else if (status == -ENOMEM) {
+		mlog_errno(status);
+		msleep(50);
+		goto resend;
+	} else {
 		BUG_ON(status < 0);
 		BUG_ON(status > DLM_LOCK_RES_OWNER_UNKNOWN);
 		*real_master = (u8) (status & 0xff);
@@ -1689,13 +1712,21 @@ int dlm_master_requery_handler(struct o2net_msg *msg, u32 len, void *data,
 			int ret = dlm_dispatch_assert_master(dlm, res,
 							     0, 0, flags);
 			if (ret < 0) {
-				mlog_errno(-ENOMEM);
-				/* retry!? */
-				BUG();
-			}
-		} else /* put.. incase we are not the master */
+				mlog_errno(ret);
+				spin_unlock(&res->spinlock);
+				dlm_lockres_put(res);
+				spin_unlock(&dlm->spinlock);
+				dlm_put(dlm);
+				/* sender will take care of this and retry */
+				return ret;
+			} else
+				__dlm_lockres_grab_inflight_worker(dlm, res);
+			spin_unlock(&res->spinlock);
+		} else {
+			/* put.. incase we are not the master */
+			spin_unlock(&res->spinlock);
 			dlm_lockres_put(res);
-		spin_unlock(&res->spinlock);
+		}
 	}
 	spin_unlock(&dlm->spinlock);
 
@@ -1745,13 +1776,13 @@ static int dlm_process_recovery_data(struct dlm_ctxt *dlm,
 				     struct dlm_migratable_lockres *mres)
 {
 	struct dlm_migratable_lock *ml;
-	struct list_head *queue;
+	struct list_head *queue, *iter;
 	struct list_head *tmpq = NULL;
 	struct dlm_lock *newlock = NULL;
 	struct dlm_lockstatus *lksb = NULL;
 	int ret = 0;
 	int i, j, bad;
-	struct dlm_lock *lock = NULL;
+	struct dlm_lock *lock;
 	u8 from = O2NM_MAX_NODES;
 	unsigned int added = 0;
 	__be64 c;
@@ -1767,7 +1798,7 @@ static int dlm_process_recovery_data(struct dlm_ctxt *dlm,
 			     dlm->name, mres->lockname_len, mres->lockname,
 			     from);
 			spin_lock(&res->spinlock);
-			dlm_lockres_set_refmap_bit(from, res);
+			dlm_lockres_set_refmap_bit(dlm, res, from);
 			spin_unlock(&res->spinlock);
 			added++;
 			break;
@@ -1786,14 +1817,16 @@ static int dlm_process_recovery_data(struct dlm_ctxt *dlm,
 			/* MIGRATION ONLY! */
 			BUG_ON(!(mres->flags & DLM_MRES_MIGRATION));
 
+			lock = NULL;
 			spin_lock(&res->spinlock);
 			for (j = DLM_GRANTED_LIST; j <= DLM_BLOCKED_LIST; j++) {
 				tmpq = dlm_list_idx_to_ptr(res, j);
-				list_for_each_entry(lock, tmpq, list) {
-					if (lock->ml.cookie != ml->cookie)
-						lock = NULL;
-					else
+				list_for_each(iter, tmpq) {
+					lock = list_entry(iter,
+						  struct dlm_lock, list);
+					if (lock->ml.cookie == ml->cookie)
 						break;
+					lock = NULL;
 				}
 				if (lock)
 					break;
@@ -1881,6 +1914,13 @@ static int dlm_process_recovery_data(struct dlm_ctxt *dlm,
 		if (ml->type == LKM_NLMODE)
 			goto skip_lvb;
 
+		/*
+		 * If the lock is in the blocked list it can't have a valid lvb,
+		 * so skip it
+		 */
+		if (ml->list == DLM_BLOCKED_LIST)
+			goto skip_lvb;
+
 		if (!dlm_lvb_is_empty(mres->lvb)) {
 			if (lksb->flags & DLM_LKSB_PUT_LVB) {
 				/* other node was trying to update
@@ -1961,11 +2001,19 @@ skip_lvb:
 		}
 		if (!bad) {
 			dlm_lock_get(newlock);
-			list_add_tail(&newlock->list, queue);
+			if (mres->flags & DLM_MRES_RECOVERY &&
+					ml->list == DLM_CONVERTING_LIST &&
+					newlock->ml.type >
+					newlock->ml.convert_type) {
+				/* newlock is doing downconvert, add it to the
+				 * head of converting list */
+				list_add(&newlock->list, queue);
+			} else
+				list_add_tail(&newlock->list, queue);
 			mlog(0, "%s:%.*s: added lock for node %u, "
 			     "setting refmap bit\n", dlm->name,
 			     res->lockname.len, res->lockname.name, ml->node);
-			dlm_lockres_set_refmap_bit(ml->node, res);
+			dlm_lockres_set_refmap_bit(dlm, res, ml->node);
 			added++;
 		}
 		spin_unlock(&res->spinlock);
@@ -1978,11 +2026,8 @@ leave:
 	dlm_lockres_drop_inflight_ref(dlm, res);
 	spin_unlock(&res->spinlock);
 
-	if (ret < 0) {
+	if (ret < 0)
 		mlog_errno(ret);
-		if (newlock)
-			dlm_lock_put(newlock);
-	}
 
 	return ret;
 }
@@ -2076,7 +2121,6 @@ static void dlm_finish_local_lockres_recovery(struct dlm_ctxt *dlm,
 					      u8 dead_node, u8 new_master)
 {
 	int i;
-	struct hlist_node *hash_iter;
 	struct hlist_head *bucket;
 	struct dlm_lock_resource *res, *next;
 
@@ -2084,6 +2128,9 @@ static void dlm_finish_local_lockres_recovery(struct dlm_ctxt *dlm,
 
 	list_for_each_entry_safe(res, next, &dlm->reco.resources, recovering) {
 		if (res->owner == dead_node) {
+			mlog(0, "%s: res %.*s, Changing owner from %u to %u\n",
+			     dlm->name, res->lockname.len, res->lockname.name,
+			     res->owner, new_master);
 			list_del_init(&res->recovering);
 			spin_lock(&res->spinlock);
 			/* new_master has our reference from
@@ -2104,41 +2151,31 @@ static void dlm_finish_local_lockres_recovery(struct dlm_ctxt *dlm,
 	 * if necessary */
 	for (i = 0; i < DLM_HASH_BUCKETS; i++) {
 		bucket = dlm_lockres_hash(dlm, i);
-		hlist_for_each_entry(res, hash_iter, bucket, hash_node) {
-			if (res->state & DLM_LOCK_RES_RECOVERING) {
-				if (res->owner == dead_node) {
-					mlog(0, "(this=%u) res %.*s owner=%u "
-					     "was not on recovering list, but "
-					     "clearing state anyway\n",
-					     dlm->node_num, res->lockname.len,
-					     res->lockname.name, new_master);
-				} else if (res->owner == dlm->node_num) {
-					mlog(0, "(this=%u) res %.*s owner=%u "
-					     "was not on recovering list, "
-					     "owner is THIS node, clearing\n",
-					     dlm->node_num, res->lockname.len,
-					     res->lockname.name, new_master);
-				} else
-					continue;
+		hlist_for_each_entry(res, bucket, hash_node) {
+			if (!(res->state & DLM_LOCK_RES_RECOVERING))
+				continue;
 
-				if (!list_empty(&res->recovering)) {
-					mlog(0, "%s:%.*s: lockres was "
-					     "marked RECOVERING, owner=%u\n",
-					     dlm->name, res->lockname.len,
-					     res->lockname.name, res->owner);
-					list_del_init(&res->recovering);
-					dlm_lockres_put(res);
-				}
-				spin_lock(&res->spinlock);
-				/* new_master has our reference from
-				 * the lock state sent during recovery */
-				dlm_change_lockres_owner(dlm, res, new_master);
-				res->state &= ~DLM_LOCK_RES_RECOVERING;
-				if (__dlm_lockres_has_locks(res))
-					__dlm_dirty_lockres(dlm, res);
-				spin_unlock(&res->spinlock);
-				wake_up(&res->wq);
+			if (res->owner != dead_node &&
+			    res->owner != dlm->node_num)
+				continue;
+
+			if (!list_empty(&res->recovering)) {
+				list_del_init(&res->recovering);
+				dlm_lockres_put(res);
 			}
+
+			/* new_master has our reference from
+			 * the lock state sent during recovery */
+			mlog(0, "%s: res %.*s, Changing owner from %u to %u\n",
+			     dlm->name, res->lockname.len, res->lockname.name,
+			     res->owner, new_master);
+			spin_lock(&res->spinlock);
+			dlm_change_lockres_owner(dlm, res, new_master);
+			res->state &= ~DLM_LOCK_RES_RECOVERING;
+			if (__dlm_lockres_has_locks(res))
+				__dlm_dirty_lockres(dlm, res);
+			spin_unlock(&res->spinlock);
+			wake_up(&res->wq);
 		}
 	}
 }
@@ -2252,12 +2289,12 @@ static void dlm_free_dead_locks(struct dlm_ctxt *dlm,
 			     res->lockname.len, res->lockname.name, freed, dead_node);
 			__dlm_print_one_lock_resource(res);
 		}
-		dlm_lockres_clear_refmap_bit(dead_node, res);
+		dlm_lockres_clear_refmap_bit(dlm, res, dead_node);
 	} else if (test_bit(dead_node, res->refmap)) {
 		mlog(0, "%s:%.*s: dead node %u had a ref, but had "
 		     "no locks and had not purged before dying\n", dlm->name,
 		     res->lockname.len, res->lockname.name, dead_node);
-		dlm_lockres_clear_refmap_bit(dead_node, res);
+		dlm_lockres_clear_refmap_bit(dlm, res, dead_node);
 	}
 
 	/* do not kick thread yet */
@@ -2273,7 +2310,6 @@ static void dlm_free_dead_locks(struct dlm_ctxt *dlm,
 
 static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node)
 {
-	struct hlist_node *iter;
 	struct dlm_lock_resource *res;
 	int i;
 	struct hlist_head *bucket;
@@ -2299,7 +2335,7 @@ static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node)
 	 */
 	for (i = 0; i < DLM_HASH_BUCKETS; i++) {
 		bucket = dlm_lockres_hash(dlm, i);
-		hlist_for_each_entry(res, iter, bucket, hash_node) {
+		hlist_for_each_entry(res, bucket, hash_node) {
  			/* always prune any $RECOVERY entries for dead nodes,
  			 * otherwise hangs can occur during later recovery */
 			if (dlm_is_recovery_lock(res->lockname.name,
@@ -2313,6 +2349,10 @@ static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node)
 						     dead_node, dlm->name);
 						list_del_init(&lock->list);
 						dlm_lock_put(lock);
+						/* Can't schedule
+						 * DLM_UNLOCK_FREE_LOCK
+						 * - do manually */
+						dlm_lock_put(lock);
 						break;
 					}
 				}
@@ -2324,9 +2364,9 @@ static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node)
 			dlm_revalidate_lvb(dlm, res, dead_node);
 			if (res->owner == dead_node) {
 				if (res->state & DLM_LOCK_RES_DROPPING_REF) {
-					mlog(ML_NOTICE, "Ignore %.*s for "
+					mlog(ML_NOTICE, "%s: res %.*s, Skip "
 					     "recovery as it is being freed\n",
-					     res->lockname.len,
+					     dlm->name, res->lockname.len,
 					     res->lockname.name);
 				} else
 					dlm_move_lockres_to_recovery_list(dlm,
@@ -2335,6 +2375,14 @@ static void dlm_do_local_recovery_cleanup(struct dlm_ctxt *dlm, u8 dead_node)
 			} else if (res->owner == dlm->node_num) {
 				dlm_free_dead_locks(dlm, res, dead_node);
 				__dlm_lockres_calc_usage(dlm, res);
+			} else if (res->owner == DLM_LOCK_RES_OWNER_UNKNOWN) {
+				if (test_bit(dead_node, res->refmap)) {
+					mlog(0, "%s:%.*s: dead node %u had a ref, but had "
+						"no locks and had not purged before dying\n",
+						dlm->name, res->lockname.len,
+						res->lockname.name, dead_node);
+					dlm_lockres_clear_refmap_bit(dlm, res, dead_node);
+				}
 			}
 			spin_unlock(&res->spinlock);
 		}
@@ -2699,6 +2747,7 @@ int dlm_begin_reco_handler(struct o2net_msg *msg, u32 len, void *data,
 		     dlm->name, br->node_idx, br->dead_node,
 		     dlm->reco.dead_node, dlm->reco.new_master);
 		spin_unlock(&dlm->spinlock);
+		dlm_put(dlm);
 		return -EAGAIN;
 	}
 	spin_unlock(&dlm->spinlock);
@@ -2870,8 +2919,8 @@ int dlm_finalize_reco_handler(struct o2net_msg *msg, u32 len, void *data,
 				BUG();
 			}
 			dlm->reco.state &= ~DLM_RECO_STATE_FINALIZE;
+			__dlm_reset_recovery(dlm);
 			spin_unlock(&dlm->spinlock);
-			dlm_reset_recovery(dlm);
 			dlm_kick_recovery_thread(dlm);
 			break;
 		default:

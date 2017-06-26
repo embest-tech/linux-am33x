@@ -81,7 +81,7 @@ static int qsfp_read(struct qib_pportdata *ppd, int addr, void *bp, int len)
 	 * Module could take up to 2 Msec to respond to MOD_SEL, and there
 	 * is no way to tell if it is ready, so we must wait.
 	 */
-	msleep(2);
+	msleep(20);
 
 	/* Make sure TWSI bus is in sane state. */
 	ret = qib_twsi_reset(dd);
@@ -99,6 +99,7 @@ static int qsfp_read(struct qib_pportdata *ppd, int addr, void *bp, int len)
 	while (cnt < len) {
 		unsigned in_page;
 		int wlen = len - cnt;
+
 		in_page = addr % QSFP_PAGESIZE;
 		if ((in_page + wlen) > QSFP_PAGESIZE)
 			wlen = QSFP_PAGESIZE - in_page;
@@ -139,7 +140,7 @@ deselect:
 	else if (pass)
 		qib_dev_porterr(dd, ppd->port, "QSFP retries: %d\n", pass);
 
-	msleep(2);
+	msleep(20);
 
 bail:
 	mutex_unlock(&dd->eep_lock);
@@ -189,7 +190,7 @@ static int qib_qsfp_write(struct qib_pportdata *ppd, int addr, void *bp,
 	 * Module could take up to 2 Msec to respond to MOD_SEL,
 	 * and there is no way to tell if it is ready, so we must wait.
 	 */
-	msleep(2);
+	msleep(20);
 
 	/* Make sure TWSI bus is in sane state. */
 	ret = qib_twsi_reset(dd);
@@ -206,6 +207,7 @@ static int qib_qsfp_write(struct qib_pportdata *ppd, int addr, void *bp,
 	while (cnt < len) {
 		unsigned in_page;
 		int wlen = len - cnt;
+
 		in_page = addr % QSFP_PAGESIZE;
 		if ((in_page + wlen) > QSFP_PAGESIZE)
 			wlen = QSFP_PAGESIZE - in_page;
@@ -234,7 +236,7 @@ deselect:
 	 * going away, and there is no way to tell if it is ready.
 	 * so we must wait.
 	 */
-	msleep(2);
+	msleep(20);
 
 bail:
 	mutex_unlock(&dd->eep_lock);
@@ -273,18 +275,12 @@ int qib_refresh_qsfp_cache(struct qib_pportdata *ppd, struct qib_qsfp_cache *cp)
 	int ret;
 	int idx;
 	u16 cks;
-	u32 mask;
 	u8 peek[4];
 
 	/* ensure sane contents on invalid reads, for cable swaps */
 	memset(cp, 0, sizeof(*cp));
 
-	mask = QSFP_GPIO_MOD_PRS_N;
-	if (ppd->hw_pidx)
-		mask <<= QSFP_GPIO_PORT2_SHIFT;
-
-	ret = ppd->dd->f_gpio_mod(ppd->dd, 0, 0, 0);
-	if (ret & mask) {
+	if (!qib_qsfp_mod_present(ppd)) {
 		ret = -ENODEV;
 		goto bail;
 	}
@@ -302,6 +298,7 @@ int qib_refresh_qsfp_cache(struct qib_pportdata *ppd, struct qib_qsfp_cache *cp)
 		 * set the page to zero, Even if it already appears to be zero.
 		 */
 		u8 poke = 0;
+
 		ret = qib_qsfp_write(ppd, 127, &poke, 1);
 		udelay(50);
 		if (ret != 1) {
@@ -444,6 +441,19 @@ const char * const qib_qsfp_devtech[16] = {
 
 static const char *pwr_codes = "1.5W2.0W2.5W3.5W";
 
+int qib_qsfp_mod_present(struct qib_pportdata *ppd)
+{
+	u32 mask;
+	int ret;
+
+	mask = QSFP_GPIO_MOD_PRS_N <<
+		(ppd->hw_pidx * QSFP_GPIO_PORT2_SHIFT);
+	ret = ppd->dd->f_gpio_mod(ppd->dd, 0, 0, 0);
+
+	return !((ret & mask) >>
+		 ((ppd->hw_pidx * QSFP_GPIO_PORT2_SHIFT) + 3));
+}
+
 /*
  * Initialize structures that control access to QSFP. Called once per port
  * on cards that support QSFP.
@@ -452,7 +462,6 @@ void qib_qsfp_init(struct qib_qsfp_data *qd,
 		   void (*fevent)(struct work_struct *))
 {
 	u32 mask, highs;
-	int pins;
 
 	struct qib_devdata *dd = qd->ppd->dd;
 
@@ -474,20 +483,6 @@ void qib_qsfp_init(struct qib_qsfp_data *qd,
 	udelay(20); /* Generous RST dwell */
 
 	dd->f_gpio_mod(dd, mask, mask, mask);
-	/* Spec says module can take up to two seconds! */
-	mask = QSFP_GPIO_MOD_PRS_N;
-	if (qd->ppd->hw_pidx)
-		mask <<= QSFP_GPIO_PORT2_SHIFT;
-
-	/* Do not try to wait here. Better to let event handle it */
-	pins = dd->f_gpio_mod(dd, 0, 0, 0);
-	if (pins & mask)
-		goto bail;
-	/* We see a module, but it may be unwise to look yet. Just schedule */
-	qd->t_insert = get_jiffies_64();
-	queue_work(ib_wq, &qd->work);
-bail:
-	return;
 }
 
 void qib_qsfp_deinit(struct qib_qsfp_data *qd)
@@ -547,6 +542,7 @@ int qib_qsfp_dump(struct qib_pportdata *ppd, char *buf, int len)
 
 	while (bidx < QSFP_DEFAULT_HDR_CNT) {
 		int iidx;
+
 		ret = qsfp_read(ppd, bidx, bin_buff, QSFP_DUMP_CHUNK);
 		if (ret < 0)
 			goto bail;

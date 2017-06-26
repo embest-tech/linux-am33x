@@ -36,12 +36,16 @@
 #include <linux/ide.h>
 #include <linux/scatterlist.h>
 
-#include <asm/mach-au1x00/au1xxx.h>
+#include <asm/mach-au1x00/au1000.h>
 #include <asm/mach-au1x00/au1xxx_dbdma.h>
 #include <asm/mach-au1x00/au1xxx_ide.h>
 
 #define DRV_NAME	"au1200-ide"
 #define DRV_AUTHOR	"Enrico Walther <enrico.walther@amd.com> / Pete Popov <ppopov@embeddedalley.com>"
+
+#ifndef IDE_REG_SHIFT
+#define IDE_REG_SHIFT 5
+#endif
 
 /* enable the burstmode in the dbdma */
 #define IDE_AU1XXX_BURSTMODE	1
@@ -317,10 +321,11 @@ static void auide_ddma_rx_callback(int irq, void *param)
 }
 #endif /* end CONFIG_BLK_DEV_IDE_AU1XXX_MDMA2_DBDMA */
 
-static void auide_init_dbdma_dev(dbdev_tab_t *dev, u32 dev_id, u32 tsize, u32 devwidth, u32 flags)
+static void auide_init_dbdma_dev(dbdev_tab_t *dev, u32 dev_id, u32 tsize,
+				 u32 devwidth, u32 flags, u32 regbase)
 {
 	dev->dev_id          = dev_id;
-	dev->dev_physaddr    = (u32)IDE_PHYS_ADDR;
+	dev->dev_physaddr    = CPHYSADDR(regbase);
 	dev->dev_intlevel    = 0;
 	dev->dev_intpolarity = 0;
 	dev->dev_tsize       = tsize;
@@ -344,7 +349,7 @@ static int auide_ddma_init(ide_hwif_t *hwif, const struct ide_port_info *d)
 	dbdev_tab_t source_dev_tab, target_dev_tab;
 	u32 dev_id, tsize, devwidth, flags;
 
-	dev_id	 = IDE_DDMA_REQ;
+	dev_id	 = hwif->ddma_id;
 
 	tsize    =  8; /*  1 */
 	devwidth = 32; /* 16 */
@@ -356,20 +361,17 @@ static int auide_ddma_init(ide_hwif_t *hwif, const struct ide_port_info *d)
 #endif
 
 	/* setup dev_tab for tx channel */
-	auide_init_dbdma_dev( &source_dev_tab,
-			      dev_id,
-			      tsize, devwidth, DEV_FLAGS_OUT | flags);
+	auide_init_dbdma_dev(&source_dev_tab, dev_id, tsize, devwidth,
+			     DEV_FLAGS_OUT | flags, auide->regbase);
  	auide->tx_dev_id = au1xxx_ddma_add_device( &source_dev_tab );
 
-	auide_init_dbdma_dev( &source_dev_tab,
-			      dev_id,
-			      tsize, devwidth, DEV_FLAGS_IN | flags);
+	auide_init_dbdma_dev(&source_dev_tab, dev_id, tsize, devwidth,
+			     DEV_FLAGS_IN | flags, auide->regbase);
  	auide->rx_dev_id = au1xxx_ddma_add_device( &source_dev_tab );
 	
 	/* We also need to add a target device for the DMA */
-	auide_init_dbdma_dev( &target_dev_tab,
-			      (u32)DSCR_CMD0_ALWAYS,
-			      tsize, devwidth, DEV_FLAGS_ANYUSE);
+	auide_init_dbdma_dev(&target_dev_tab, (u32)DSCR_CMD0_ALWAYS, tsize,
+			     devwidth, DEV_FLAGS_ANYUSE, auide->regbase);
 	auide->target_dev_id = au1xxx_ddma_add_device(&target_dev_tab);	
  
 	/* Get a channel for TX */
@@ -411,14 +413,12 @@ static int auide_ddma_init(ide_hwif_t *hwif, const struct ide_port_info *d)
 #endif
 
 	/* setup dev_tab for tx channel */
-	auide_init_dbdma_dev( &source_dev_tab,
-			      (u32)DSCR_CMD0_ALWAYS,
-			      8, 32, DEV_FLAGS_OUT | flags);
+	auide_init_dbdma_dev(&source_dev_tab, (u32)DSCR_CMD0_ALWAYS, 8, 32,
+			     DEV_FLAGS_OUT | flags, auide->regbase);
  	auide->tx_dev_id = au1xxx_ddma_add_device( &source_dev_tab );
 
-	auide_init_dbdma_dev( &source_dev_tab,
-			      (u32)DSCR_CMD0_ALWAYS,
-			      8, 32, DEV_FLAGS_IN | flags);
+	auide_init_dbdma_dev(&source_dev_tab, (u32)DSCR_CMD0_ALWAYS, 8, 32,
+			     DEV_FLAGS_IN | flags, auide->regbase);
  	auide->rx_dev_id = au1xxx_ddma_add_device( &source_dev_tab );
 	
 	/* Get a channel for TX */
@@ -540,6 +540,14 @@ static int au_ide_probe(struct platform_device *dev)
 		goto out;
 	}
 
+	res = platform_get_resource(dev, IORESOURCE_DMA, 0);
+	if (!res) {
+		pr_debug("%s: no DDMA ID resource\n", DRV_NAME);
+		ret = -ENODEV;
+		goto out;
+	}
+	ahwif->ddma_id = res->start;
+
 	memset(&hw, 0, sizeof(hw));
 	auide_setup_ports(&hw, ahwif);
 	hw.irq = ahwif->irq;
@@ -578,24 +586,12 @@ static int au_ide_remove(struct platform_device *dev)
 static struct platform_driver au1200_ide_driver = {
 	.driver = {
 		.name		= "au1200-ide",
-		.owner		= THIS_MODULE,
 	},
 	.probe 		= au_ide_probe,
 	.remove		= au_ide_remove,
 };
 
-static int __init au_ide_init(void)
-{
-	return platform_driver_register(&au1200_ide_driver);
-}
-
-static void __exit au_ide_exit(void)
-{
-	platform_driver_unregister(&au1200_ide_driver);
-}
+module_platform_driver(au1200_ide_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("AU1200 IDE driver");
-
-module_init(au_ide_init);
-module_exit(au_ide_exit);

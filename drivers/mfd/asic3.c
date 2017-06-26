@@ -20,6 +20,7 @@
 #include <linux/delay.h>
 #include <linux/irq.h>
 #include <linux/gpio.h>
+#include <linux/export.h>
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -352,12 +353,28 @@ static int asic3_gpio_irq_type(struct irq_data *data, unsigned int type)
 	return 0;
 }
 
+static int asic3_gpio_irq_set_wake(struct irq_data *data, unsigned int on)
+{
+	struct asic3 *asic = irq_data_get_irq_chip_data(data);
+	u32 bank, index;
+	u16 bit;
+
+	bank = asic3_irq_to_bank(asic, data->irq);
+	index = asic3_irq_to_index(asic, data->irq);
+	bit = 1<<index;
+
+	asic3_set_register(asic, bank + ASIC3_GPIO_SLEEP_MASK, bit, !on);
+
+	return 0;
+}
+
 static struct irq_chip asic3_gpio_irq_chip = {
 	.name		= "ASIC3-GPIO",
 	.irq_ack	= asic3_mask_gpio_irq,
 	.irq_mask	= asic3_mask_gpio_irq,
 	.irq_unmask	= asic3_unmask_gpio_irq,
 	.irq_set_type	= asic3_gpio_irq_type,
+	.irq_set_wake	= asic3_gpio_irq_set_wake,
 };
 
 static struct irq_chip asic3_irq_chip = {
@@ -524,6 +541,13 @@ static void asic3_gpio_set(struct gpio_chip *chip,
 	return;
 }
 
+static int asic3_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
+{
+	struct asic3 *asic = container_of(chip, struct asic3, gpio);
+
+	return asic->irq_base + offset;
+}
+
 static __init int asic3_gpio_probe(struct platform_device *pdev,
 				   u16 *gpio_config, int num)
 {
@@ -581,10 +605,11 @@ static int asic3_gpio_remove(struct platform_device *pdev)
 {
 	struct asic3 *asic = platform_get_drvdata(pdev);
 
-	return gpiochip_remove(&asic->gpio);
+	gpiochip_remove(&asic->gpio);
+	return 0;
 }
 
-static int asic3_clk_enable(struct asic3 *asic, struct asic3_clk *clk)
+static void asic3_clk_enable(struct asic3 *asic, struct asic3_clk *clk)
 {
 	unsigned long flags;
 	u32 cdex;
@@ -596,8 +621,6 @@ static int asic3_clk_enable(struct asic3 *asic, struct asic3_clk *clk)
 		asic3_write_register(asic, ASIC3_OFFSET(CLOCK, CDEX), cdex);
 	}
 	spin_unlock_irqrestore(&asic->lock, flags);
-
-	return 0;
 }
 
 static void asic3_clk_disable(struct asic3 *asic, struct asic3_clk *clk)
@@ -673,7 +696,7 @@ static int ds1wm_disable(struct platform_device *pdev)
 	return 0;
 }
 
-static struct mfd_cell asic3_cell_ds1wm = {
+static const struct mfd_cell asic3_cell_ds1wm = {
 	.name          = "ds1wm",
 	.enable        = ds1wm_enable,
 	.disable       = ds1wm_disable,
@@ -775,10 +798,12 @@ static int asic3_mmc_disable(struct platform_device *pdev)
 	return 0;
 }
 
-static struct mfd_cell asic3_cell_mmc = {
+static const struct mfd_cell asic3_cell_mmc = {
 	.name          = "tmio-mmc",
 	.enable        = asic3_mmc_enable,
 	.disable       = asic3_mmc_disable,
+	.suspend       = asic3_mmc_disable,
+	.resume        = asic3_mmc_enable,
 	.platform_data = &asic3_mmc_data,
 	.pdata_size    = sizeof(asic3_mmc_data),
 	.num_resources = ARRAY_SIZE(asic3_mmc_resources),
@@ -811,24 +836,43 @@ static int asic3_leds_disable(struct platform_device *pdev)
 	return 0;
 }
 
+static int asic3_leds_suspend(struct platform_device *pdev)
+{
+	const struct mfd_cell *cell = mfd_get_cell(pdev);
+	struct asic3 *asic = dev_get_drvdata(pdev->dev.parent);
+
+	while (asic3_gpio_get(&asic->gpio, ASIC3_GPIO(C, cell->id)) != 0)
+		msleep(1);
+
+	asic3_clk_disable(asic, &asic->clocks[clock_ledn[cell->id]]);
+
+	return 0;
+}
+
 static struct mfd_cell asic3_cell_leds[ASIC3_NUM_LEDS] = {
 	[0] = {
 		.name          = "leds-asic3",
 		.id            = 0,
 		.enable        = asic3_leds_enable,
 		.disable       = asic3_leds_disable,
+		.suspend       = asic3_leds_suspend,
+		.resume        = asic3_leds_enable,
 	},
 	[1] = {
 		.name          = "leds-asic3",
 		.id            = 1,
 		.enable        = asic3_leds_enable,
 		.disable       = asic3_leds_disable,
+		.suspend       = asic3_leds_suspend,
+		.resume        = asic3_leds_enable,
 	},
 	[2] = {
 		.name          = "leds-asic3",
 		.id            = 2,
 		.enable        = asic3_leds_enable,
 		.disable       = asic3_leds_disable,
+		.suspend       = asic3_leds_suspend,
+		.resume        = asic3_leds_enable,
 	},
 };
 
@@ -856,29 +900,35 @@ static int __init asic3_mfd_probe(struct platform_device *pdev,
 	ds1wm_resources[0].end   >>= asic->bus_shift;
 
 	/* MMC */
-	asic->tmio_cnf = ioremap((ASIC3_SD_CONFIG_BASE >> asic->bus_shift) +
+	if (mem_sdio) {
+		asic->tmio_cnf = ioremap((ASIC3_SD_CONFIG_BASE >> asic->bus_shift) +
 				 mem_sdio->start,
 				 ASIC3_SD_CONFIG_SIZE >> asic->bus_shift);
-	if (!asic->tmio_cnf) {
-		ret = -ENOMEM;
-		dev_dbg(asic->dev, "Couldn't ioremap SD_CONFIG\n");
-		goto out;
+		if (!asic->tmio_cnf) {
+			ret = -ENOMEM;
+			dev_dbg(asic->dev, "Couldn't ioremap SD_CONFIG\n");
+			goto out;
+		}
 	}
 	asic3_mmc_resources[0].start >>= asic->bus_shift;
 	asic3_mmc_resources[0].end   >>= asic->bus_shift;
 
-	ret = mfd_add_devices(&pdev->dev, pdev->id,
-			&asic3_cell_ds1wm, 1, mem, asic->irq_base);
-	if (ret < 0)
-		goto out;
-
-	if (mem_sdio && (irq >= 0)) {
+	if (pdata->clock_rate) {
+		ds1wm_pdata.clock_rate = pdata->clock_rate;
 		ret = mfd_add_devices(&pdev->dev, pdev->id,
-			&asic3_cell_mmc, 1, mem_sdio, irq);
+			&asic3_cell_ds1wm, 1, mem, asic->irq_base, NULL);
 		if (ret < 0)
 			goto out;
 	}
 
+	if (mem_sdio && (irq >= 0)) {
+		ret = mfd_add_devices(&pdev->dev, pdev->id,
+			&asic3_cell_mmc, 1, mem_sdio, irq, NULL);
+		if (ret < 0)
+			goto out;
+	}
+
+	ret = 0;
 	if (pdata->leds) {
 		int i;
 
@@ -887,7 +937,7 @@ static int __init asic3_mfd_probe(struct platform_device *pdev,
 			asic3_cell_leds[i].pdata_size = sizeof(pdata->leds[i]);
 		}
 		ret = mfd_add_devices(&pdev->dev, 0,
-			asic3_cell_leds, ASIC3_NUM_LEDS, NULL, 0);
+			asic3_cell_leds, ASIC3_NUM_LEDS, NULL, 0, NULL);
 	}
 
  out:
@@ -905,13 +955,14 @@ static void asic3_mfd_remove(struct platform_device *pdev)
 /* Core */
 static int __init asic3_probe(struct platform_device *pdev)
 {
-	struct asic3_platform_data *pdata = pdev->dev.platform_data;
+	struct asic3_platform_data *pdata = dev_get_platdata(&pdev->dev);
 	struct asic3 *asic;
 	struct resource *mem;
 	unsigned long clksel;
 	int ret = 0;
 
-	asic = kzalloc(sizeof(struct asic3), GFP_KERNEL);
+	asic = devm_kzalloc(&pdev->dev,
+			    sizeof(struct asic3), GFP_KERNEL);
 	if (asic == NULL) {
 		printk(KERN_ERR "kzalloc failed\n");
 		return -ENOMEM;
@@ -923,16 +974,14 @@ static int __init asic3_probe(struct platform_device *pdev)
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!mem) {
-		ret = -ENOMEM;
 		dev_err(asic->dev, "no MEM resource\n");
-		goto out_free;
+		return -ENOMEM;
 	}
 
 	asic->mapping = ioremap(mem->start, resource_size(mem));
 	if (!asic->mapping) {
-		ret = -ENOMEM;
 		dev_err(asic->dev, "Couldn't ioremap\n");
-		goto out_free;
+		return -ENOMEM;
 	}
 
 	asic->irq_base = pdata->irq_base;
@@ -949,12 +998,14 @@ static int __init asic3_probe(struct platform_device *pdev)
 		goto out_unmap;
 	}
 
+	asic->gpio.label = "asic3";
 	asic->gpio.base = pdata->gpio_base;
 	asic->gpio.ngpio = ASIC3_NUM_GPIOS;
 	asic->gpio.get = asic3_gpio_get;
 	asic->gpio.set = asic3_gpio_set;
 	asic->gpio.direction_input = asic3_gpio_direction_input;
 	asic->gpio.direction_output = asic3_gpio_direction_output;
+	asic->gpio.to_irq = asic3_gpio_to_irq;
 
 	ret = asic3_gpio_probe(pdev,
 			       pdata->gpio_config,
@@ -971,6 +1022,9 @@ static int __init asic3_probe(struct platform_device *pdev)
 
 	asic3_mfd_probe(pdev, pdata, mem);
 
+	asic3_set_register(asic, ASIC3_OFFSET(EXTCF, SELECT),
+		(ASIC3_EXTCF_CF0_BUF_EN|ASIC3_EXTCF_CF0_PWAIT_EN), 1);
+
 	dev_info(asic->dev, "ASIC3 Core driver\n");
 
 	return 0;
@@ -981,16 +1035,16 @@ static int __init asic3_probe(struct platform_device *pdev)
  out_unmap:
 	iounmap(asic->mapping);
 
- out_free:
-	kfree(asic);
-
 	return ret;
 }
 
-static int __devexit asic3_remove(struct platform_device *pdev)
+static int asic3_remove(struct platform_device *pdev)
 {
 	int ret;
 	struct asic3 *asic = platform_get_drvdata(pdev);
+
+	asic3_set_register(asic, ASIC3_OFFSET(EXTCF, SELECT),
+		(ASIC3_EXTCF_CF0_BUF_EN|ASIC3_EXTCF_CF0_PWAIT_EN), 0);
 
 	asic3_mfd_remove(pdev);
 
@@ -1003,8 +1057,6 @@ static int __devexit asic3_remove(struct platform_device *pdev)
 
 	iounmap(asic->mapping);
 
-	kfree(asic);
-
 	return 0;
 }
 
@@ -1016,7 +1068,7 @@ static struct platform_driver asic3_device_driver = {
 	.driver		= {
 		.name	= "asic3",
 	},
-	.remove		= __devexit_p(asic3_remove),
+	.remove		= asic3_remove,
 	.shutdown	= asic3_shutdown,
 };
 

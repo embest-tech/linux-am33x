@@ -46,7 +46,7 @@
 static struct super_block *ipath_super;
 
 static int ipathfs_mknod(struct inode *dir, struct dentry *dentry,
-			 int mode, const struct file_operations *fops,
+			 umode_t mode, const struct file_operations *fops,
 			 void *data)
 {
 	int error;
@@ -61,7 +61,7 @@ static int ipathfs_mknod(struct inode *dir, struct dentry *dentry,
 	inode->i_mode = mode;
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	inode->i_private = data;
-	if ((mode & S_IFMT) == S_IFDIR) {
+	if (S_ISDIR(mode)) {
 		inode->i_op = &simple_dir_inode_operations;
 		inc_nlink(inode);
 		inc_nlink(dir);
@@ -76,21 +76,20 @@ bail:
 	return error;
 }
 
-static int create_file(const char *name, mode_t mode,
+static int create_file(const char *name, umode_t mode,
 		       struct dentry *parent, struct dentry **dentry,
 		       const struct file_operations *fops, void *data)
 {
 	int error;
 
-	*dentry = NULL;
-	mutex_lock(&parent->d_inode->i_mutex);
+	mutex_lock(&d_inode(parent)->i_mutex);
 	*dentry = lookup_one_len(name, parent, strlen(name));
 	if (!IS_ERR(*dentry))
-		error = ipathfs_mknod(parent->d_inode, *dentry,
+		error = ipathfs_mknod(d_inode(parent), *dentry,
 				      mode, fops, data);
 	else
-		error = PTR_ERR(dentry);
-	mutex_unlock(&parent->d_inode->i_mutex);
+		error = PTR_ERR(*dentry);
+	mutex_unlock(&d_inode(parent)->i_mutex);
 
 	return error;
 }
@@ -113,7 +112,7 @@ static ssize_t atomic_counters_read(struct file *file, char __user *buf,
 	struct infinipath_counters counters;
 	struct ipath_devdata *dd;
 
-	dd = file->f_path.dentry->d_inode->i_private;
+	dd = file_inode(file)->i_private;
 	dd->ipath_f_read_counters(dd, &counters);
 
 	return simple_read_from_buffer(buf, count, ppos, &counters,
@@ -154,7 +153,7 @@ static ssize_t flash_read(struct file *file, char __user *buf,
 		goto bail;
 	}
 
-	dd = file->f_path.dentry->d_inode->i_private;
+	dd = file_inode(file)->i_private;
 	if (ipath_eeprom_read(dd, pos, tmp, count)) {
 		ipath_dev_err(dd, "failed to read from flash\n");
 		ret = -ENXIO;
@@ -207,7 +206,7 @@ static ssize_t flash_write(struct file *file, const char __user *buf,
 		goto bail_tmp;
 	}
 
-	dd = file->f_path.dentry->d_inode->i_private;
+	dd = file_inode(file)->i_private;
 	if (ipath_eeprom_write(dd, pos, tmp, count)) {
 		ret = -ENXIO;
 		ipath_dev_err(dd, "failed to write to flash\n");
@@ -278,11 +277,11 @@ static int remove_file(struct dentry *parent, char *name)
 	}
 
 	spin_lock(&tmp->d_lock);
-	if (!(d_unhashed(tmp) && tmp->d_inode)) {
+	if (!d_unhashed(tmp) && d_really_is_positive(tmp)) {
 		dget_dlock(tmp);
 		__d_drop(tmp);
 		spin_unlock(&tmp->d_lock);
-		simple_unlink(parent->d_inode, tmp);
+		simple_unlink(d_inode(parent), tmp);
 	} else
 		spin_unlock(&tmp->d_lock);
 
@@ -303,7 +302,7 @@ static int remove_device_files(struct super_block *sb,
 	int ret;
 
 	root = dget(sb->s_root);
-	mutex_lock(&root->d_inode->i_mutex);
+	mutex_lock(&d_inode(root)->i_mutex);
 	snprintf(unit, sizeof unit, "%02d", dd->ipath_unit);
 	dir = lookup_one_len(unit, root, strlen(unit));
 
@@ -316,10 +315,10 @@ static int remove_device_files(struct super_block *sb,
 	remove_file(dir, "flash");
 	remove_file(dir, "atomic_counters");
 	d_delete(dir);
-	ret = simple_rmdir(root->d_inode, dir);
+	ret = simple_rmdir(d_inode(root), dir);
 
 bail:
-	mutex_unlock(&root->d_inode->i_mutex);
+	mutex_unlock(&d_inode(root)->i_mutex);
 	dput(root);
 	return ret;
 }
@@ -410,6 +409,7 @@ static struct file_system_type ipathfs_fs_type = {
 	.mount =	ipathfs_mount,
 	.kill_sb =	ipathfs_kill_super,
 };
+MODULE_ALIAS_FS("ipathfs");
 
 int __init ipath_init_ipathfs(void)
 {

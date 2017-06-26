@@ -1,0 +1,32 @@
+/*
+ * Copyright (C) 2015 Embest Technology Co., Ltd., - http://www.embest-tech.com
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This dts is for embest own product:
+ * SOM-PH8800 + BB-EPH1800
+ */
+/*/dts-v1/;*/
+
+#include "embest-SOM_PH8800-BB_EPH1800.dts"
+
+&lcd0{
+	panel-timing {
+		/*This is the timing for HDMI&VGA*/
+		clock-frequency = <80000000>;
+		hactive = <1024>;
+		vactive = <768>;
+		hfront-porch = <18>;
+		hback-porch = <297>;
+		hsync-len = <53>;
+		vfront-porch = <3>;
+		vback-porch = <35>;
+		vsync-len = <6>;
+		hsync-active = <0>;
+		vsync-active = <0>;
+		de-active = <1>;
+		pixelclk-active = <1>;
+	};
+};

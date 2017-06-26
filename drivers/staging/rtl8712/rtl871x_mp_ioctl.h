@@ -1,3 +1,28 @@
+/******************************************************************************
+ *
+ * Copyright(c) 2007 - 2010 Realtek Corporation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ * Modifications for inclusion into the Linux staging tree are
+ * Copyright(c) 2010 Larry Finger. All rights reserved.
+ *
+ * Contact information:
+ * WLAN FAE <wlanfae@realtek.com>
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
+ ******************************************************************************/
 #ifndef _RTL871X_MP_IOCTL_H
 #define _RTL871X_MP_IOCTL_H
 
@@ -61,41 +86,8 @@ struct DR_VARIABLE_STRUCT {
 int mp_start_joinbss(struct _adapter *padapter, struct ndis_802_11_ssid *pssid);
 
 /* oid_rtl_seg_87_11_00 */
-uint oid_rt_pro8711_join_bss_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_read_register_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_write_register_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_burst_read_register_hdl(struct oid_par_priv*
-					       poid_par_priv);
-uint oid_rt_pro_burst_write_register_hdl(struct oid_par_priv*
-						poid_par_priv);
-uint oid_rt_pro_write_txcmd_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_read16_eeprom_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_write16_eeprom_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro8711_wi_poll_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro8711_pkt_loss_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_rd_attrib_mem_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_wr_attrib_mem_hdl(struct oid_par_priv *poid_par_priv);
-uint  oid_rt_pro_set_rf_intfs_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_poll_rx_status_hdl(struct oid_par_priv *poid_par_priv);
-/* oid_rtl_seg_87_11_20 */
-uint oid_rt_pro_cfg_debug_message_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_set_data_rate_ex_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_set_basic_rate_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_set_power_tracking_hdl(
-				struct oid_par_priv *poid_par_priv);
-/* oid_rtl_seg_87_11_50 */
-uint oid_rt_pro_qry_pwrstate_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_set_pwrstate_hdl(
-				struct oid_par_priv *poid_par_priv);
-/* oid_rtl_seg_87_11_F0 */
-uint oid_rt_pro_h2c_set_rate_table_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_h2c_get_rate_table_hdl(
-				struct oid_par_priv *poid_par_priv);
 /* oid_rtl_seg_81_80_00 */
 uint oid_rt_pro_set_data_rate_hdl(
 				struct oid_par_priv *poid_par_priv);
@@ -134,28 +126,15 @@ uint oid_rt_pro_write_rf_reg_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_read_rf_reg_hdl(struct oid_par_priv *poid_par_priv);
 /* oid_rtl_seg_81_85 */
 uint oid_rt_wireless_mode_hdl(struct oid_par_priv *poid_par_priv);
-/* oid_rtl_seg_87_12_00 */
-uint oid_rt_pro_encryption_ctrl_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_add_sta_info_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_dele_sta_info_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_query_dr_variable_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_rx_packet_type_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_read_efuse_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_write_efuse_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_rw_efuse_pgpkt_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_get_efuse_current_size_hdl(
 				struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_efuse_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_pro_efuse_map_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_set_bandwidth_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_set_crystal_cap_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_set_rx_packet_type_hdl(struct oid_par_priv *poid_par_priv);
 uint oid_rt_get_efuse_max_size_hdl(struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_set_tx_agc_offset_hdl(
-				struct oid_par_priv *poid_par_priv);
-uint oid_rt_pro_set_pkt_test_mode_hdl(
-				struct oid_par_priv *poid_par_priv);
 uint oid_rt_get_thermal_meter_hdl(
 				struct oid_par_priv *poid_par_priv);
 uint oid_rt_reset_phy_rx_packet_count_hdl(
@@ -307,7 +286,6 @@ struct rfintfs_parm {
 
 struct mp_xmit_packet {
 	unsigned int len;
-	unsigned int mem[MAX_MP_XMITBUF_SZ >> 2];
 };
 
 struct psmode_param {
@@ -410,8 +388,7 @@ static struct mp_ioctl_handler mp_ioctl_hdl[] = {
 	{sizeof(struct psmode_param), NULL, 0},/*13*/
 	{sizeof(struct eeprom_rw_param), NULL, 0},/*14*/
 	{sizeof(struct eeprom_rw_param), NULL, 0},/*15*/
-	{sizeof(u8), oid_rt_pro_set_power_tracking_hdl,
-			     OID_RT_PRO_SET_POWER_TRACKING},/*16*/
+	{sizeof(unsigned char), NULL, 0},/*16*/
 	{sizeof(u32), NULL, 0},/*17*/
 	{sizeof(u32), oid_rt_pro_set_continuous_tx_hdl,
 			     OID_RT_PRO_SET_CONTINUOUS_TX},/*18*/

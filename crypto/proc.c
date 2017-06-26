@@ -16,6 +16,7 @@
 #include <linux/atomic.h>
 #include <linux/init.h>
 #include <linux/crypto.h>
+#include <linux/module.h>	/* for module_name() */
 #include <linux/rwsem.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -88,6 +89,9 @@ static int c_show(struct seq_file *m, void *p)
 	seq_printf(m, "selftest     : %s\n",
 		   (alg->cra_flags & CRYPTO_ALG_TESTED) ?
 		   "passed" : "unknown");
+	seq_printf(m, "internal     : %s\n",
+		   (alg->cra_flags & CRYPTO_ALG_INTERNAL) ?
+		   "yes" : "no");
 
 	if (alg->cra_flags & CRYPTO_ALG_LARVAL) {
 		seq_printf(m, "type         : larval\n");

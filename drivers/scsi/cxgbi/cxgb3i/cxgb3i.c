@@ -14,7 +14,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ":%s: " fmt, __func__
 
-#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <scsi/scsi_host.h>
@@ -87,7 +86,7 @@ static struct scsi_host_template cxgb3i_host_template = {
 	.proc_name	= DRV_MODULE_NAME,
 	.can_queue	= CXGB3I_SCSI_HOST_QDEPTH,
 	.queuecommand	= iscsi_queuecommand,
-	.change_queue_depth = iscsi_change_queue_depth,
+	.change_queue_depth = scsi_change_queue_depth,
 	.sg_tablesize	= SG_ALL,
 	.max_sectors	= 0xFFFF,
 	.cmd_per_lun	= ISCSI_DEF_CMD_PER_LUN,
@@ -97,6 +96,7 @@ static struct scsi_host_template cxgb3i_host_template = {
 	.target_alloc	= iscsi_target_alloc,
 	.use_clustering	= DISABLE_CLUSTERING,
 	.this_id	= -1,
+	.track_queue_depth = 1,
 };
 
 static struct iscsi_transport cxgb3i_iscsi_transport = {
@@ -106,25 +106,7 @@ static struct iscsi_transport cxgb3i_iscsi_transport = {
 	.caps		= CAP_RECOVERY_L0 | CAP_MULTI_R2T | CAP_HDRDGST
 				| CAP_DATADGST | CAP_DIGEST_OFFLOAD |
 				CAP_PADDING_OFFLOAD | CAP_TEXT_NEGO,
-	.param_mask	= ISCSI_MAX_RECV_DLENGTH | ISCSI_MAX_XMIT_DLENGTH |
-				ISCSI_HDRDGST_EN | ISCSI_DATADGST_EN |
-				ISCSI_INITIAL_R2T_EN | ISCSI_MAX_R2T |
-				ISCSI_IMM_DATA_EN | ISCSI_FIRST_BURST |
-				ISCSI_MAX_BURST | ISCSI_PDU_INORDER_EN |
-				ISCSI_DATASEQ_INORDER_EN | ISCSI_ERL |
-				ISCSI_CONN_PORT | ISCSI_CONN_ADDRESS |
-				ISCSI_EXP_STATSN | ISCSI_PERSISTENT_PORT |
-				ISCSI_PERSISTENT_ADDRESS |
-				ISCSI_TARGET_NAME | ISCSI_TPGT |
-				ISCSI_USERNAME | ISCSI_PASSWORD |
-				ISCSI_USERNAME_IN | ISCSI_PASSWORD_IN |
-				ISCSI_FAST_ABORT | ISCSI_ABORT_TMO |
-				ISCSI_LU_RESET_TMO | ISCSI_TGT_RESET_TMO |
-				ISCSI_PING_TMO | ISCSI_RECV_TMO |
-				ISCSI_IFACE_NAME | ISCSI_INITIATOR_NAME,
-	.host_param_mask	= ISCSI_HOST_HWADDRESS | ISCSI_HOST_IPADDRESS |
-				ISCSI_HOST_INITIATOR_NAME |
-				ISCSI_HOST_NETDEV_NAME,
+	.attr_is_visible	= cxgbi_attr_is_visible,
 	.get_host_param	= cxgbi_get_host_param,
 	.set_host_param	= cxgbi_set_host_param,
 	/* session management */
@@ -985,7 +967,8 @@ static int init_act_open(struct cxgbi_sock *csk)
 		csk->saddr.sin_addr.s_addr = chba->ipv4addr;
 
 	csk->rss_qid = 0;
-	csk->l2t = t3_l2t_get(t3dev, dst_get_neighbour(dst), ndev);
+	csk->l2t = t3_l2t_get(t3dev, dst, ndev,
+			      &csk->daddr.sin_addr.s_addr);
 	if (!csk->l2t) {
 		pr_err("NO l2t available.\n");
 		return -EINVAL;

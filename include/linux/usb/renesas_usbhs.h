@@ -62,14 +62,22 @@ struct renesas_usbhs_platform_callback {
 	 * Hardware exit function for platform.
 	 * it is called when driver was removed
 	 */
-	void (*hardware_exit)(struct platform_device *pdev);
+	int (*hardware_exit)(struct platform_device *pdev);
+
+	/*
+	 * option:
+	 *
+	 * for board specific clock control
+	 */
+	int (*power_ctrl)(struct platform_device *pdev,
+			   void __iomem *base, int enable);
 
 	/*
 	 * option:
 	 *
 	 * Phy reset for platform
 	 */
-	void (*phy_reset)(struct platform_device *pdev);
+	int (*phy_reset)(struct platform_device *pdev);
 
 	/*
 	 * get USB ID function
@@ -82,6 +90,13 @@ struct renesas_usbhs_platform_callback {
 	 * get VBUS status function.
 	 */
 	int (*get_vbus)(struct platform_device *pdev);
+
+	/*
+	 * option:
+	 *
+	 * VBUS control is needed for Host
+	 */
+	int (*set_vbus)(struct platform_device *pdev, int enable);
 };
 
 /*
@@ -101,6 +116,8 @@ struct renesas_usbhs_driver_param {
 	 * option:
 	 *
 	 * for BUSWAIT :: BWAIT
+	 * see
+	 *	renesas_usbhs/common.c :: usbhsc_set_buswait()
 	 * */
 	int buswait_bwait;
 
@@ -109,17 +126,29 @@ struct renesas_usbhs_driver_param {
 	 *
 	 * delay time from notify_hotplug callback
 	 */
-	int detection_delay;
+	int detection_delay; /* msec */
 
 	/*
 	 * option:
 	 *
 	 * dma id for dmaengine
+	 * The data transfer direction on D0FIFO/D1FIFO should be
+	 * fixed for keeping consistency.
+	 * So, the platform id settings will be..
+	 *	.d0_tx_id = xx_TX,
+	 *	.d1_rx_id = xx_RX,
+	 * or
+	 *	.d1_tx_id = xx_TX,
+	 *	.d0_rx_id = xx_RX,
 	 */
 	int d0_tx_id;
 	int d0_rx_id;
 	int d1_tx_id;
 	int d1_rx_id;
+	int d2_tx_id;
+	int d2_rx_id;
+	int d3_tx_id;
+	int d3_rx_id;
 
 	/*
 	 * option:
@@ -127,7 +156,21 @@ struct renesas_usbhs_driver_param {
 	 * pio <--> dma border.
 	 */
 	int pio_dma_border; /* default is 64byte */
+
+	u32 type;
+	u32 enable_gpio;
+
+	/*
+	 * option:
+	 */
+	u32 has_otg:1; /* for controlling PWEN/EXTLP */
+	u32 has_sudmac:1; /* for SUDMAC */
+	u32 has_usb_dmac:1; /* for USB-DMAC */
+#define USBHS_USB_DMAC_XFER_SIZE	32	/* hardcode the xfer size */
 };
+
+#define USBHS_TYPE_R8A7790 1
+#define USBHS_TYPE_R8A7791 2
 
 /*
  * option:

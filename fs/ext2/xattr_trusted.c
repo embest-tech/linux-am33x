@@ -5,11 +5,7 @@
  * Copyright (C) 2003 by Andreas Gruenbacher, <a.gruenbacher@computer.org>
  */
 
-#include <linux/module.h>
-#include <linux/string.h>
-#include <linux/capability.h>
-#include <linux/fs.h>
-#include <linux/ext2_fs.h>
+#include "ext2.h"
 #include "xattr.h"
 
 static size_t
@@ -36,7 +32,7 @@ ext2_xattr_trusted_get(struct dentry *dentry, const char *name,
 {
 	if (strcmp(name, "") == 0)
 		return -EINVAL;
-	return ext2_xattr_get(dentry->d_inode, EXT2_XATTR_INDEX_TRUSTED, name,
+	return ext2_xattr_get(d_inode(dentry), EXT2_XATTR_INDEX_TRUSTED, name,
 			      buffer, size);
 }
 
@@ -46,7 +42,7 @@ ext2_xattr_trusted_set(struct dentry *dentry, const char *name,
 {
 	if (strcmp(name, "") == 0)
 		return -EINVAL;
-	return ext2_xattr_set(dentry->d_inode, EXT2_XATTR_INDEX_TRUSTED, name,
+	return ext2_xattr_set(d_inode(dentry), EXT2_XATTR_INDEX_TRUSTED, name,
 			      value, size, flags);
 }
 

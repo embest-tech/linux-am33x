@@ -54,7 +54,7 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
 	 * because the ->io_bitmap_max value must match the bitmap
 	 * contents:
 	 */
-	tss = &per_cpu(init_tss, get_cpu());
+	tss = &per_cpu(cpu_tss, get_cpu());
 
 	if (turn_on)
 		bitmap_clear(t->io_bitmap_ptr, from, num);
@@ -93,8 +93,9 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
  * on system-call entry - see also fork() and the signal handling
  * code.
  */
-long sys_iopl(unsigned int level, struct pt_regs *regs)
+SYSCALL_DEFINE1(iopl, unsigned int, level)
 {
+	struct pt_regs *regs = current_pt_regs();
 	unsigned int old = (regs->flags >> 12) & 3;
 	struct thread_struct *t = &current->thread;
 

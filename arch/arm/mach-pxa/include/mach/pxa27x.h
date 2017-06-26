@@ -1,6 +1,7 @@
 #ifndef __MACH_PXA27x_H
 #define __MACH_PXA27x_H
 
+#include <linux/suspend.h>
 #include <mach/hardware.h>
 #include <mach/pxa2xx-regs.h>
 #include <mach/mfp-pxa27x.h>
@@ -18,10 +19,7 @@
 #define ARB_CORE_PARK		(1<<24)	   /* Be parked with core when idle */
 #define ARB_LOCK_FLAG		(1<<23)	   /* Only Locking masters gain access to the bus */
 
-extern void __init pxa27x_map_io(void);
-extern void __init pxa27x_init_irq(void);
 extern int __init pxa27x_set_pwrmode(unsigned int mode);
-
-#define pxa27x_handle_irq	ichp_handle_irq
+extern void pxa27x_cpu_pm_enter(suspend_state_t state);
 
 #endif /* __MACH_PXA27x_H */

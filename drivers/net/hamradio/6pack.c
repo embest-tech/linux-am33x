@@ -13,7 +13,6 @@
  */
 
 #include <linux/module.h>
-#include <asm/system.h>
 #include <asm/uaccess.h>
 #include <linux/bitops.h>
 #include <linux/string.h>
@@ -248,6 +247,9 @@ static netdev_tx_t sp_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct sixpack *sp = netdev_priv(dev);
 
+	if (skb->protocol == htons(ETH_P_IP))
+		return ax25_ip_xmit(skb);
+
 	spin_lock_bh(&sp->lock);
 	/* We were not busy, so we are now... :-) */
 	netif_stop_queue(dev);
@@ -285,18 +287,6 @@ static int sp_close(struct net_device *dev)
 	return 0;
 }
 
-/* Return the frame type ID */
-static int sp_header(struct sk_buff *skb, struct net_device *dev,
-		     unsigned short type, const void *daddr,
-		     const void *saddr, unsigned len)
-{
-#ifdef CONFIG_INET
-	if (type != ETH_P_AX25)
-		return ax25_hard_header(skb, dev, type, daddr, saddr, len);
-#endif
-	return 0;
-}
-
 static int sp_set_mac_address(struct net_device *dev, void *addr)
 {
 	struct sockaddr_ax25 *sa = addr;
@@ -309,20 +299,6 @@ static int sp_set_mac_address(struct net_device *dev, void *addr)
 
 	return 0;
 }
-
-static int sp_rebuild_header(struct sk_buff *skb)
-{
-#ifdef CONFIG_INET
-	return ax25_rebuild_header(skb);
-#else
-	return 0;
-#endif
-}
-
-static const struct header_ops sp_header_ops = {
-	.create		= sp_header,
-	.rebuild	= sp_rebuild_header,
-};
 
 static const struct net_device_ops sp_netdev_ops = {
 	.ndo_open		= sp_open_dev,
@@ -338,7 +314,7 @@ static void sp_setup(struct net_device *dev)
 	dev->destructor		= free_netdev;
 	dev->mtu		= SIXP_MTU;
 	dev->hard_header_len	= AX25_MAX_HEADER_LEN;
-	dev->header_ops 	= &sp_header_ops;
+	dev->header_ops 	= &ax25_header_ops;
 
 	dev->addr_len		= AX25_ADDR_LEN;
 	dev->type		= ARPHRD_AX25;
@@ -597,7 +573,8 @@ static int sixpack_open(struct tty_struct *tty)
 	if (tty->ops->write == NULL)
 		return -EOPNOTSUPP;
 
-	dev = alloc_netdev(sizeof(struct sixpack), "sp%d", sp_setup);
+	dev = alloc_netdev(sizeof(struct sixpack), "sp%d", NET_NAME_UNKNOWN,
+			   sp_setup);
 	if (!dev) {
 		err = -ENOMEM;
 		goto out;
@@ -663,7 +640,8 @@ static int sixpack_open(struct tty_struct *tty)
 	tty->receive_room = 65536;
 
 	/* Now we're ready to register. */
-	if (register_netdev(dev))
+	err = register_netdev(dev);
+	if (err)
 		goto out_free;
 
 	tnc_init(sp);
@@ -674,8 +652,7 @@ out_free:
 	kfree(xbuff);
 	kfree(rbuff);
 
-	if (dev)
-		free_netdev(dev);
+	free_netdev(dev);
 
 out:
 	return err;
@@ -812,9 +789,9 @@ static struct tty_ldisc_ops sp_ldisc = {
 
 /* Initialize 6pack control device -- register 6pack line discipline */
 
-static const char msg_banner[]  __initdata = KERN_INFO \
+static const char msg_banner[]  __initconst = KERN_INFO \
 	"AX.25: 6pack driver, " SIXPACK_VERSION "\n";
-static const char msg_regfail[] __initdata = KERN_ERR  \
+static const char msg_regfail[] __initconst = KERN_ERR  \
 	"6pack: can't register line discipline (err = %d)\n";
 
 static int __init sixpack_init_driver(void)
@@ -830,7 +807,7 @@ static int __init sixpack_init_driver(void)
 	return status;
 }
 
-static const char msg_unregfail[] __exitdata = KERN_ERR \
+static const char msg_unregfail[] = KERN_ERR \
 	"6pack: can't unregister line discipline (err = %d)\n";
 
 static void __exit sixpack_exit_driver(void)

@@ -20,6 +20,7 @@
 .file "twofish-x86_64-asm.S"
 .text
 
+#include <linux/linkage.h>
 #include <asm/asm-offsets.h>
 
 #define a_offset	0
@@ -214,17 +215,12 @@
 	xor	%r8d,		d ## D;\
 	ror	$1,		d ## D;
 
-.align 8
-.global twofish_enc_blk
-.global twofish_dec_blk
-
-twofish_enc_blk:
+ENTRY(twofish_enc_blk)
 	pushq    R1
 
-	/* %rdi contains the crypto tfm address */
+	/* %rdi contains the ctx address */
 	/* %rsi contains the output address */
 	/* %rdx contains the input address */
-	add	$crypto_tfm_ctx_offset, %rdi	/* set ctx address */
 	/* ctx address is moved to free one non-rex register
 	as target for the 8bit high operations */
 	mov	%rdi,		%r11
@@ -268,16 +264,16 @@ twofish_enc_blk:
 	movq	R1,	8(%rsi)
 
 	popq	R1
-	movq	$1,%rax
+	movl	$1,%eax
 	ret
+ENDPROC(twofish_enc_blk)
 
-twofish_dec_blk:
+ENTRY(twofish_dec_blk)
 	pushq    R1
 
-	/* %rdi contains the crypto tfm address */
+	/* %rdi contains the ctx address */
 	/* %rsi contains the output address */
 	/* %rdx contains the input address */
-	add	$crypto_tfm_ctx_offset, %rdi	/* set ctx address */
 	/* ctx address is moved to free one non-rex register
 	as target for the 8bit high operations */
 	mov	%rdi,		%r11
@@ -320,5 +316,6 @@ twofish_dec_blk:
 	movq	R1,	8(%rsi)
 
 	popq	R1
-	movq	$1,%rax
+	movl	$1,%eax
 	ret
+ENDPROC(twofish_dec_blk)

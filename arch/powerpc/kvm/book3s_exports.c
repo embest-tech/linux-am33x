@@ -17,21 +17,14 @@
  * Authors: Alexander Graf <agraf@suse.de>
  */
 
-#include <linux/module.h>
+#include <linux/export.h>
+#include <asm/kvm_ppc.h>
 #include <asm/kvm_book3s.h>
 
-#ifdef CONFIG_KVM_BOOK3S_64_HV
+#ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
 EXPORT_SYMBOL_GPL(kvmppc_hv_entry_trampoline);
-#else
-EXPORT_SYMBOL_GPL(kvmppc_handler_trampoline_enter);
-EXPORT_SYMBOL_GPL(kvmppc_handler_lowmem_trampoline);
-EXPORT_SYMBOL_GPL(kvmppc_rmcall);
-EXPORT_SYMBOL_GPL(kvmppc_load_up_fpu);
-#ifdef CONFIG_ALTIVEC
-EXPORT_SYMBOL_GPL(kvmppc_load_up_altivec);
 #endif
-#ifdef CONFIG_VSX
-EXPORT_SYMBOL_GPL(kvmppc_load_up_vsx);
-#endif
+#ifdef CONFIG_KVM_BOOK3S_PR_POSSIBLE
+EXPORT_SYMBOL_GPL(kvmppc_entry_trampoline);
 #endif
 

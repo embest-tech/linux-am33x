@@ -23,8 +23,6 @@
 
 /* #define DEBUG */
 
-#define pr_fmt(fmt) KBUILD_BASENAME ": " fmt
-
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -116,7 +114,7 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 
 	if (effect->type < FF_EFFECT_MIN || effect->type > FF_EFFECT_MAX ||
 	    !test_bit(effect->type, dev->ffbit)) {
-		pr_debug("invalid or not supported effect type in upload\n");
+		dev_dbg(&dev->dev, "invalid or not supported effect type in upload\n");
 		return -EINVAL;
 	}
 
@@ -124,7 +122,7 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 	    (effect->u.periodic.waveform < FF_WAVEFORM_MIN ||
 	     effect->u.periodic.waveform > FF_WAVEFORM_MAX ||
 	     !test_bit(effect->u.periodic.waveform, dev->ffbit))) {
-		pr_debug("invalid or not supported wave form in upload\n");
+		dev_dbg(&dev->dev, "invalid or not supported wave form in upload\n");
 		return -EINVAL;
 	}
 
@@ -138,8 +136,8 @@ int input_ff_upload(struct input_dev *dev, struct ff_effect *effect,
 
 	if (effect->id == -1) {
 		for (id = 0; id < ff->max_effects; id++)
-		     if (!ff->effect_owners[id])
-			break;
+			if (!ff->effect_owners[id])
+				break;
 
 		if (id >= ff->max_effects) {
 			ret = -ENOSPC;
@@ -246,7 +244,7 @@ static int flush_effects(struct input_dev *dev, struct file *file)
 	struct ff_device *ff = dev->ff;
 	int i;
 
-	pr_debug("flushing now\n");
+	dev_dbg(&dev->dev, "flushing now\n");
 
 	mutex_lock(&ff->mutex);
 
@@ -309,18 +307,23 @@ EXPORT_SYMBOL_GPL(input_ff_event);
  * Once ff device is created you need to setup its upload, erase,
  * playback and other handlers before registering input device
  */
-int input_ff_create(struct input_dev *dev, int max_effects)
+int input_ff_create(struct input_dev *dev, unsigned int max_effects)
 {
 	struct ff_device *ff;
+	size_t ff_dev_size;
 	int i;
 
 	if (!max_effects) {
-		pr_err("cannot allocate device without any effects\n");
+		dev_err(&dev->dev, "cannot allocate device without any effects\n");
 		return -EINVAL;
 	}
 
-	ff = kzalloc(sizeof(struct ff_device) +
-		     max_effects * sizeof(struct file *), GFP_KERNEL);
+	ff_dev_size = sizeof(struct ff_device) +
+				max_effects * sizeof(struct file *);
+	if (ff_dev_size < max_effects) /* overflow */
+		return -EINVAL;
+
+	ff = kzalloc(ff_dev_size, GFP_KERNEL);
 	if (!ff)
 		return -ENOMEM;
 

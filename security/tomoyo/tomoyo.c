@@ -144,10 +144,9 @@ static int tomoyo_bprm_check_security(struct linux_binprm *bprm)
  *
  * Returns 0 on success, negative value otherwise.
  */
-static int tomoyo_inode_getattr(struct vfsmount *mnt, struct dentry *dentry)
+static int tomoyo_inode_getattr(const struct path *path)
 {
-	struct path path = { mnt, dentry };
-	return tomoyo_path_perm(TOMOYO_TYPE_GETATTR, &path, NULL);
+	return tomoyo_path_perm(TOMOYO_TYPE_GETATTR, path, NULL);
 }
 
 /**
@@ -186,7 +185,7 @@ static int tomoyo_path_unlink(struct path *parent, struct dentry *dentry)
  * Returns 0 on success, negative value otherwise.
  */
 static int tomoyo_path_mkdir(struct path *parent, struct dentry *dentry,
-			     int mode)
+			     umode_t mode)
 {
 	struct path path = { parent->mnt, dentry };
 	return tomoyo_path_number_perm(TOMOYO_TYPE_MKDIR, &path,
@@ -234,7 +233,7 @@ static int tomoyo_path_symlink(struct path *parent, struct dentry *dentry,
  * Returns 0 on success, negative value otherwise.
  */
 static int tomoyo_path_mknod(struct path *parent, struct dentry *dentry,
-			     int mode, unsigned int dev)
+			     umode_t mode, unsigned int dev)
 {
 	struct path path = { parent->mnt, dentry };
 	int type = TOMOYO_TYPE_CREATE;
@@ -319,14 +318,14 @@ static int tomoyo_file_fcntl(struct file *file, unsigned int cmd,
 }
 
 /**
- * tomoyo_dentry_open - Target for security_dentry_open().
+ * tomoyo_file_open - Target for security_file_open().
  *
  * @f:    Pointer to "struct file".
  * @cred: Pointer to "struct cred".
  *
  * Returns 0 on success, negative value otherwise.
  */
-static int tomoyo_dentry_open(struct file *f, const struct cred *cred)
+static int tomoyo_file_open(struct file *f, const struct cred *cred)
 {
 	int flags = f->f_flags;
 	/* Don't check read permission here if called from do_execve(). */
@@ -353,17 +352,14 @@ static int tomoyo_file_ioctl(struct file *file, unsigned int cmd,
 /**
  * tomoyo_path_chmod - Target for security_path_chmod().
  *
- * @dentry: Pointer to "struct dentry".
- * @mnt:    Pointer to "struct vfsmount".
- * @mode:   DAC permission mode.
+ * @path: Pointer to "struct path".
+ * @mode: DAC permission mode.
  *
  * Returns 0 on success, negative value otherwise.
  */
-static int tomoyo_path_chmod(struct dentry *dentry, struct vfsmount *mnt,
-			     mode_t mode)
+static int tomoyo_path_chmod(struct path *path, umode_t mode)
 {
-	struct path path = { mnt, dentry };
-	return tomoyo_path_number_perm(TOMOYO_TYPE_CHMOD, &path,
+	return tomoyo_path_number_perm(TOMOYO_TYPE_CHMOD, path,
 				       mode & S_IALLUGO);
 }
 
@@ -376,13 +372,15 @@ static int tomoyo_path_chmod(struct dentry *dentry, struct vfsmount *mnt,
  *
  * Returns 0 on success, negative value otherwise.
  */
-static int tomoyo_path_chown(struct path *path, uid_t uid, gid_t gid)
+static int tomoyo_path_chown(struct path *path, kuid_t uid, kgid_t gid)
 {
 	int error = 0;
-	if (uid != (uid_t) -1)
-		error = tomoyo_path_number_perm(TOMOYO_TYPE_CHOWN, path, uid);
-	if (!error && gid != (gid_t) -1)
-		error = tomoyo_path_number_perm(TOMOYO_TYPE_CHGRP, path, gid);
+	if (uid_valid(uid))
+		error = tomoyo_path_number_perm(TOMOYO_TYPE_CHOWN, path,
+						from_kuid(&init_user_ns, uid));
+	if (!error && gid_valid(gid))
+		error = tomoyo_path_number_perm(TOMOYO_TYPE_CHGRP, path,
+						from_kgid(&init_user_ns, gid));
 	return error;
 }
 
@@ -409,8 +407,8 @@ static int tomoyo_path_chroot(struct path *path)
  *
  * Returns 0 on success, negative value otherwise.
  */
-static int tomoyo_sb_mount(char *dev_name, struct path *path,
-			   char *type, unsigned long flags, void *data)
+static int tomoyo_sb_mount(const char *dev_name, struct path *path,
+			   const char *type, unsigned long flags, void *data)
 {
 	return tomoyo_mount_permission(dev_name, path, type, flags, data);
 }
@@ -442,6 +440,64 @@ static int tomoyo_sb_pivotroot(struct path *old_path, struct path *new_path)
 	return tomoyo_path2_perm(TOMOYO_TYPE_PIVOT_ROOT, new_path, old_path);
 }
 
+/**
+ * tomoyo_socket_listen - Check permission for listen().
+ *
+ * @sock:    Pointer to "struct socket".
+ * @backlog: Backlog parameter.
+ *
+ * Returns 0 on success, negative value otherwise.
+ */
+static int tomoyo_socket_listen(struct socket *sock, int backlog)
+{
+	return tomoyo_socket_listen_permission(sock);
+}
+
+/**
+ * tomoyo_socket_connect - Check permission for connect().
+ *
+ * @sock:     Pointer to "struct socket".
+ * @addr:     Pointer to "struct sockaddr".
+ * @addr_len: Size of @addr.
+ *
+ * Returns 0 on success, negative value otherwise.
+ */
+static int tomoyo_socket_connect(struct socket *sock, struct sockaddr *addr,
+				 int addr_len)
+{
+	return tomoyo_socket_connect_permission(sock, addr, addr_len);
+}
+
+/**
+ * tomoyo_socket_bind - Check permission for bind().
+ *
+ * @sock:     Pointer to "struct socket".
+ * @addr:     Pointer to "struct sockaddr".
+ * @addr_len: Size of @addr.
+ *
+ * Returns 0 on success, negative value otherwise.
+ */
+static int tomoyo_socket_bind(struct socket *sock, struct sockaddr *addr,
+			      int addr_len)
+{
+	return tomoyo_socket_bind_permission(sock, addr, addr_len);
+}
+
+/**
+ * tomoyo_socket_sendmsg - Check permission for sendmsg().
+ *
+ * @sock: Pointer to "struct socket".
+ * @msg:  Pointer to "struct msghdr".
+ * @size: Size of message.
+ *
+ * Returns 0 on success, negative value otherwise.
+ */
+static int tomoyo_socket_sendmsg(struct socket *sock, struct msghdr *msg,
+				 int size)
+{
+	return tomoyo_socket_sendmsg_permission(sock, msg, size);
+}
+
 /*
  * tomoyo_security_ops is a "struct security_operations" which is used for
  * registering TOMOYO.
@@ -455,7 +511,7 @@ static struct security_operations tomoyo_security_ops = {
 	.bprm_set_creds      = tomoyo_bprm_set_creds,
 	.bprm_check_security = tomoyo_bprm_check_security,
 	.file_fcntl          = tomoyo_file_fcntl,
-	.dentry_open         = tomoyo_dentry_open,
+	.file_open           = tomoyo_file_open,
 	.path_truncate       = tomoyo_path_truncate,
 	.path_unlink         = tomoyo_path_unlink,
 	.path_mkdir          = tomoyo_path_mkdir,
@@ -472,10 +528,14 @@ static struct security_operations tomoyo_security_ops = {
 	.sb_mount            = tomoyo_sb_mount,
 	.sb_umount           = tomoyo_sb_umount,
 	.sb_pivotroot        = tomoyo_sb_pivotroot,
+	.socket_bind         = tomoyo_socket_bind,
+	.socket_connect      = tomoyo_socket_connect,
+	.socket_listen       = tomoyo_socket_listen,
+	.socket_sendmsg      = tomoyo_socket_sendmsg,
 };
 
 /* Lock for GC. */
-struct srcu_struct tomoyo_ss;
+DEFINE_SRCU(tomoyo_ss);
 
 /**
  * tomoyo_init - Register TOMOYO Linux as a LSM module.
@@ -489,8 +549,7 @@ static int __init tomoyo_init(void)
 	if (!security_module_enable(&tomoyo_security_ops))
 		return 0;
 	/* register ourselves with the security framework */
-	if (register_security(&tomoyo_security_ops) ||
-	    init_srcu_struct(&tomoyo_ss))
+	if (register_security(&tomoyo_security_ops))
 		panic("Failure registering TOMOYO Linux");
 	printk(KERN_INFO "TOMOYO Linux initialized\n");
 	cred->security = &tomoyo_kernel_domain;

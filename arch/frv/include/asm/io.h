@@ -21,6 +21,7 @@
 #include <asm/virtconvert.h>
 #include <asm/string.h>
 #include <asm/mb-regs.h>
+#include <asm-generic/pci_iomap.h>
 #include <linux/delay.h>
 
 /*
@@ -242,6 +243,9 @@ static inline void writel(uint32_t datum, volatile void __iomem *addr)
 		__flush_PCI_writes();
 }
 
+#define writeb_relaxed writeb
+#define writew_relaxed writew
+#define writel_relaxed writel
 
 /* Values for nocacheflag and cmode */
 #define IOMAP_FULL_CACHING		0
@@ -338,6 +342,11 @@ static inline void iowrite32(u32 val, void __iomem *p)
 		__flush_PCI_writes();
 }
 
+#define ioread16be(addr)	be16_to_cpu(ioread16(addr))
+#define ioread32be(addr)	be32_to_cpu(ioread32(addr))
+#define iowrite16be(v, addr)	iowrite16(cpu_to_be16(v), (addr))
+#define iowrite32be(v, addr)	iowrite32(cpu_to_be32(v), (addr))
+
 static inline void ioread8_rep(void __iomem *p, void *dst, unsigned long count)
 {
 	io_insb((unsigned long) p, dst, count);
@@ -370,7 +379,6 @@ static inline void iowrite32_rep(void __iomem *p, const void *src, unsigned long
 
 /* Create a virtual mapping cookie for a PCI BAR (memory or IO) */
 struct pci_dev;
-extern void __iomem *pci_iomap(struct pci_dev *dev, int bar, unsigned long max);
 static inline void pci_iounmap(struct pci_dev *dev, void __iomem *p)
 {
 }

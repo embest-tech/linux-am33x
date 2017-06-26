@@ -1,7 +1,5 @@
 /*
- * linux/include/asm-s390/qdio.h
- *
- * Copyright 2000,2008 IBM Corp.
+ * Copyright IBM Corp. 2000, 2008
  * Author(s): Utz Bacher <utz.bacher@de.ibm.com>
  *	      Jan Glauber <jang@linux.vnet.ibm.com>
  *
@@ -45,6 +43,8 @@ struct qdesfmt0 {
 	u32 dkey : 4;
 	u32	 : 16;
 } __attribute__ ((packed));
+
+#define QDR_AC_MULTI_BUFFER_ENABLE 0x01
 
 /**
  * struct qdr - queue description record (QDR)
@@ -123,6 +123,40 @@ struct slibe {
 };
 
 /**
+ * struct qaob - queue asynchronous operation block
+ * @res0: reserved parameters
+ * @res1: reserved parameter
+ * @res2: reserved parameter
+ * @res3: reserved parameter
+ * @aorc: asynchronous operation return code
+ * @flags: internal flags
+ * @cbtbs: control block type
+ * @sb_count: number of storage blocks
+ * @sba: storage block element addresses
+ * @dcount: size of storage block elements
+ * @user0: user defineable value
+ * @res4: reserved paramater
+ * @user1: user defineable value
+ * @user2: user defineable value
+ */
+struct qaob {
+	u64 res0[6];
+	u8 res1;
+	u8 res2;
+	u8 res3;
+	u8 aorc;
+	u8 flags;
+	u16 cbtbs;
+	u8 sb_count;
+	u64 sba[QDIO_MAX_ELEMENTS_PER_BUFFER];
+	u16 dcount[QDIO_MAX_ELEMENTS_PER_BUFFER];
+	u64 user0;
+	u64 res4[2];
+	u64 user1;
+	u64 user2;
+} __attribute__ ((packed, aligned(256)));
+
+/**
  * struct slib - storage list information block (SLIB)
  * @nsliba: next SLIB address (if any)
  * @sla: SL address
@@ -177,11 +211,6 @@ struct qdio_buffer_element {
 	u8 scount;
 	u8 sflags;
 	u32 length;
-#ifdef CONFIG_32BIT
-	/* private: */
-	void *res2;
-	/* public: */
-#endif
 	void *addr;
 } __attribute__ ((packed, aligned(16)));
 
@@ -198,11 +227,6 @@ struct qdio_buffer {
  * @sbal: absolute SBAL address
  */
 struct sl_element {
-#ifdef CONFIG_32BIT
-	/* private: */
-	unsigned long reserved;
-	/* public: */
-#endif
 	unsigned long sbal;
 } __attribute__ ((packed));
 
@@ -222,8 +246,42 @@ struct slsb {
 	u8 val[QDIO_MAX_BUFFERS_PER_Q];
 } __attribute__ ((packed, aligned(256)));
 
+/**
+ * struct qdio_outbuf_state - SBAL related asynchronous operation information
+ *   (for communication with upper layer programs)
+ *   (only required for use with completion queues)
+ * @flags: flags indicating state of buffer
+ * @aob: pointer to QAOB used for the particular SBAL
+ * @user: pointer to upper layer program's state information related to SBAL
+ *        (stored in user1 data of QAOB)
+ */
+struct qdio_outbuf_state {
+	u8 flags;
+	struct qaob *aob;
+	void *user;
+};
+
+#define QDIO_OUTBUF_STATE_FLAG_NONE	0x00
+#define QDIO_OUTBUF_STATE_FLAG_PENDING	0x01
+
+#define CHSC_AC1_INITIATE_INPUTQ	0x80
+
+
+/* qdio adapter-characteristics-1 flag */
+#define AC1_SIGA_INPUT_NEEDED		0x40	/* process input queues */
+#define AC1_SIGA_OUTPUT_NEEDED		0x20	/* process output queues */
+#define AC1_SIGA_SYNC_NEEDED		0x10	/* ask hypervisor to sync */
+#define AC1_AUTOMATIC_SYNC_ON_THININT	0x08	/* set by hypervisor */
+#define AC1_AUTOMATIC_SYNC_ON_OUT_PCI	0x04	/* set by hypervisor */
+#define AC1_SC_QEBSM_AVAILABLE		0x02	/* available for subchannel */
+#define AC1_SC_QEBSM_ENABLED		0x01	/* enabled for subchannel */
+
+#define CHSC_AC2_MULTI_BUFFER_AVAILABLE	0x0080
+#define CHSC_AC2_MULTI_BUFFER_ENABLED	0x0040
 #define CHSC_AC2_DATA_DIV_AVAILABLE	0x0010
 #define CHSC_AC2_DATA_DIV_ENABLED	0x0002
+
+#define CHSC_AC3_FORMAT2_CQ_AVAILABLE	0x8000
 
 struct qdio_ssqd_desc {
 	u8 flags;
@@ -243,8 +301,7 @@ struct qdio_ssqd_desc {
 	u64 sch_token;
 	u8 mro;
 	u8 mri;
-	u8:8;
-	u8 sbalic;
+	u16 qdioac3;
 	u16:16;
 	u8:8;
 	u8 mmwc;
@@ -256,18 +313,20 @@ typedef void qdio_handler_t(struct ccw_device *, unsigned int, int,
 			    int, int, unsigned long);
 
 /* qdio errors reported to the upper-layer program */
-#define QDIO_ERROR_SIGA_TARGET			0x02
-#define QDIO_ERROR_SIGA_ACCESS_EXCEPTION	0x10
-#define QDIO_ERROR_SIGA_BUSY			0x20
-#define QDIO_ERROR_ACTIVATE_CHECK_CONDITION	0x40
-#define QDIO_ERROR_SLSB_STATE			0x80
+#define QDIO_ERROR_ACTIVATE			0x0001
+#define QDIO_ERROR_GET_BUF_STATE		0x0002
+#define QDIO_ERROR_SET_BUF_STATE		0x0004
+#define QDIO_ERROR_SLSB_STATE			0x0100
+
+#define QDIO_ERROR_FATAL			0x00ff
+#define QDIO_ERROR_TEMPORARY			0xff00
 
 /* for qdio_cleanup */
 #define QDIO_FLAG_CLEANUP_USING_CLEAR		0x01
 #define QDIO_FLAG_CLEANUP_USING_HALT		0x02
 
 /**
- * struct qdio_initialize - qdio initalization data
+ * struct qdio_initialize - qdio initialization data
  * @cdev: associated ccw device
  * @q_format: queue format
  * @adapter_name: name for the adapter
@@ -280,13 +339,16 @@ typedef void qdio_handler_t(struct ccw_device *, unsigned int, int,
  * @no_output_qs: number of output queues
  * @input_handler: handler to be called for input queues
  * @output_handler: handler to be called for output queues
+ * @queue_start_poll_array: polling handlers (one per input queue or NULL)
  * @int_parm: interruption parameter
  * @input_sbal_addr_array:  address of no_input_qs * 128 pointers
  * @output_sbal_addr_array: address of no_output_qs * 128 pointers
+ * @output_sbal_state_array: no_output_qs * 128 state info (for CQ or NULL)
  */
 struct qdio_initialize {
 	struct ccw_device *cdev;
 	unsigned char q_format;
+	unsigned char qdr_ac;
 	unsigned char adapter_name[8];
 	unsigned int qib_param_field_format;
 	unsigned char *qib_param_field;
@@ -297,12 +359,42 @@ struct qdio_initialize {
 	unsigned int no_output_qs;
 	qdio_handler_t *input_handler;
 	qdio_handler_t *output_handler;
-	void (*queue_start_poll) (struct ccw_device *, int, unsigned long);
+	void (**queue_start_poll_array) (struct ccw_device *, int,
+					  unsigned long);
 	int scan_threshold;
 	unsigned long int_parm;
 	void **input_sbal_addr_array;
 	void **output_sbal_addr_array;
+	struct qdio_outbuf_state *output_sbal_state_array;
 };
+
+/**
+ * enum qdio_brinfo_entry_type - type of address entry for qdio_brinfo_desc()
+ * @l3_ipv6_addr: entry contains IPv6 address
+ * @l3_ipv4_addr: entry contains IPv4 address
+ * @l2_addr_lnid: entry contains MAC address and VLAN ID
+ */
+enum qdio_brinfo_entry_type {l3_ipv6_addr, l3_ipv4_addr, l2_addr_lnid};
+
+/**
+ * struct qdio_brinfo_entry_XXX - Address entry for qdio_brinfo_desc()
+ * @nit:  Network interface token
+ * @addr: Address of one of the three types
+ *
+ * The struct is passed to the callback function by qdio_brinfo_desc()
+ */
+struct qdio_brinfo_entry_l3_ipv6 {
+	u64 nit;
+	struct { unsigned char _s6_addr[16]; } addr;
+} __packed;
+struct qdio_brinfo_entry_l3_ipv4 {
+	u64 nit;
+	struct { uint32_t _s_addr; } addr;
+} __packed;
+struct qdio_brinfo_entry_l2 {
+	u64 nit;
+	struct { u8 mac[6]; u16 lnid; } addr_lnid;
+} __packed;
 
 #define QDIO_STATE_INACTIVE		0x00000002 /* after qdio_cleanup */
 #define QDIO_STATE_ESTABLISHED		0x00000004 /* after qdio_establish */
@@ -313,9 +405,14 @@ struct qdio_initialize {
 #define QDIO_FLAG_SYNC_OUTPUT		0x02
 #define QDIO_FLAG_PCI_OUT		0x10
 
+int qdio_alloc_buffers(struct qdio_buffer **buf, unsigned int count);
+void qdio_free_buffers(struct qdio_buffer **buf, unsigned int count);
+void qdio_reset_buffers(struct qdio_buffer **buf, unsigned int count);
+
 extern int qdio_allocate(struct qdio_initialize *);
 extern int qdio_establish(struct qdio_initialize *);
 extern int qdio_activate(struct ccw_device *);
+extern void qdio_release_aob(struct qaob *);
 extern int do_QDIO(struct ccw_device *, unsigned int, int, unsigned int,
 		   unsigned int);
 extern int qdio_start_irq(struct ccw_device *, int);
@@ -324,5 +421,10 @@ extern int qdio_get_next_buffers(struct ccw_device *, int, int *, int *);
 extern int qdio_shutdown(struct ccw_device *, int);
 extern int qdio_free(struct ccw_device *);
 extern int qdio_get_ssqd_desc(struct ccw_device *, struct qdio_ssqd_desc *);
+extern int qdio_pnso_brinfo(struct subchannel_id schid,
+		int cnc, u16 *response,
+		void (*cb)(void *priv, enum qdio_brinfo_entry_type type,
+				void *entry),
+		void *priv);
 
 #endif /* __QDIO_H__ */

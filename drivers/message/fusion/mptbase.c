@@ -63,6 +63,8 @@
 #ifdef CONFIG_MTRR
 #include <asm/mtrr.h>
 #endif
+#include <linux/kthread.h>
+#include <scsi/scsi_host.h>
 
 #include "mptbase.h"
 #include "lsi/mpi_log_fc.h"
@@ -113,7 +115,8 @@ module_param(mpt_fwfault_debug, int, 0600);
 MODULE_PARM_DESC(mpt_fwfault_debug,
 		 "Enable detection of Firmware fault and halt Firmware on fault - (default=0)");
 
-static char	MptCallbacksName[MPT_MAX_PROTOCOL_DRIVERS][50];
+static char	MptCallbacksName[MPT_MAX_PROTOCOL_DRIVERS]
+				[MPT_MAX_CALLBACKNAME_LEN+1];
 
 #ifdef MFCNT
 static int mfcounter = 0;
@@ -323,6 +326,32 @@ mpt_is_discovery_complete(MPT_ADAPTER *ioc)
 	return rc;
 }
 
+
+/**
+ *  mpt_remove_dead_ioc_func - kthread context to remove dead ioc
+ * @arg: input argument, used to derive ioc
+ *
+ * Return 0 if controller is removed from pci subsystem.
+ * Return -1 for other case.
+ */
+static int mpt_remove_dead_ioc_func(void *arg)
+{
+	MPT_ADAPTER *ioc = (MPT_ADAPTER *)arg;
+	struct pci_dev *pdev;
+
+	if ((ioc == NULL))
+		return -1;
+
+	pdev = ioc->pcidev;
+	if ((pdev == NULL))
+		return -1;
+
+	pci_stop_and_remove_bus_device_locked(pdev);
+	return 0;
+}
+
+
+
 /**
  *	mpt_fault_reset_work - work performed on workq after ioc fault
  *	@work: input argument, used to derive ioc
@@ -336,12 +365,45 @@ mpt_fault_reset_work(struct work_struct *work)
 	u32		 ioc_raw_state;
 	int		 rc;
 	unsigned long	 flags;
+	MPT_SCSI_HOST	*hd;
+	struct task_struct *p;
 
 	if (ioc->ioc_reset_in_progress || !ioc->active)
 		goto out;
 
+
 	ioc_raw_state = mpt_GetIocState(ioc, 0);
-	if ((ioc_raw_state & MPI_IOC_STATE_MASK) == MPI_IOC_STATE_FAULT) {
+	if ((ioc_raw_state & MPI_IOC_STATE_MASK) == MPI_IOC_STATE_MASK) {
+		printk(MYIOC_s_INFO_FMT "%s: IOC is non-operational !!!!\n",
+		    ioc->name, __func__);
+
+		/*
+		 * Call mptscsih_flush_pending_cmds callback so that we
+		 * flush all pending commands back to OS.
+		 * This call is required to aovid deadlock at block layer.
+		 * Dead IOC will fail to do diag reset,and this call is safe
+		 * since dead ioc will never return any command back from HW.
+		 */
+		hd = shost_priv(ioc->sh);
+		ioc->schedule_dead_ioc_flush_running_cmds(hd);
+
+		/*Remove the Dead Host */
+		p = kthread_run(mpt_remove_dead_ioc_func, ioc,
+				"mpt_dead_ioc_%d", ioc->id);
+		if (IS_ERR(p))	{
+			printk(MYIOC_s_ERR_FMT
+				"%s: Running mpt_dead_ioc thread failed !\n",
+				ioc->name, __func__);
+		} else {
+			printk(MYIOC_s_WARN_FMT
+				"%s: Running mpt_dead_ioc thread success !\n",
+				ioc->name, __func__);
+		}
+		return; /* don't rearm timer */
+	}
+
+	if ((ioc_raw_state & MPI_IOC_STATE_MASK)
+			== MPI_IOC_STATE_FAULT) {
 		printk(MYIOC_s_WARN_FMT "IOC is in FAULT state (%04xh)!!!\n",
 		       ioc->name, ioc_raw_state & MPI_DOORBELL_DATA_MASK);
 		printk(MYIOC_s_WARN_FMT "Issuing HardReset from %s!!\n",
@@ -587,12 +649,10 @@ mptbase_reply(MPT_ADAPTER *ioc, MPT_FRAME_HDR *req, MPT_FRAME_HDR *reply)
 	case MPI_FUNCTION_CONFIG:
 	case MPI_FUNCTION_SAS_IO_UNIT_CONTROL:
 		ioc->mptbase_cmds.status |= MPT_MGMT_STATUS_COMMAND_GOOD;
-		if (reply) {
-			ioc->mptbase_cmds.status |= MPT_MGMT_STATUS_RF_VALID;
-			memcpy(ioc->mptbase_cmds.reply, reply,
-			    min(MPT_DEFAULT_FRAME_SIZE,
-				4 * reply->u.reply.MsgLength));
-		}
+		ioc->mptbase_cmds.status |= MPT_MGMT_STATUS_RF_VALID;
+		memcpy(ioc->mptbase_cmds.reply, reply,
+		    min(MPT_DEFAULT_FRAME_SIZE,
+			4 * reply->u.reply.MsgLength));
 		if (ioc->mptbase_cmds.status & MPT_MGMT_STATUS_PENDING) {
 			ioc->mptbase_cmds.status &= ~MPT_MGMT_STATUS_PENDING;
 			complete(&ioc->mptbase_cmds.done);
@@ -656,8 +716,8 @@ mpt_register(MPT_CALLBACK cbfunc, MPT_DRIVER_CLASS dclass, char *func_name)
 			MptDriverClass[cb_idx] = dclass;
 			MptEvHandlers[cb_idx] = NULL;
 			last_drv_idx = cb_idx;
-			memcpy(MptCallbacksName[cb_idx], func_name,
-			    strlen(func_name) > 50 ? 50 : strlen(func_name));
+			strlcpy(MptCallbacksName[cb_idx], func_name,
+				MPT_MAX_CALLBACKNAME_LEN+1);
 			break;
 		}
 	}
@@ -975,7 +1035,7 @@ mpt_free_msg_frame(MPT_ADAPTER *ioc, MPT_FRAME_HDR *mf)
 		goto out;
 	/* signature to know if this mf is freed */
 	mf->u.frame.linkage.arg1 = cpu_to_le32(0xdeadbeaf);
-	list_add_tail(&mf->u.frame.linkage.list, &ioc->FreeQ);
+	list_add(&mf->u.frame.linkage.list, &ioc->FreeQ);
 #ifdef MFCNT
 	ioc->mfcnt--;
 #endif
@@ -1340,14 +1400,13 @@ mpt_verify_adapter(int iocid, MPT_ADAPTER **iocpp)
  *	@vendor: pci vendor id
  *	@device: pci device id
  *	@revision: pci revision id
- *	@prod_name: string returned
  *
  *	Returns product string displayed when driver loads,
  *	in /proc/mpt/summary and /sysfs/class/scsi_host/host<X>/version_product
  *
  **/
-static void
-mpt_get_product_name(u16 vendor, u16 device, u8 revision, char *prod_name)
+static const char*
+mpt_get_product_name(u16 vendor, u16 device, u8 revision)
 {
 	char *product_str = NULL;
 
@@ -1573,8 +1632,7 @@ mpt_get_product_name(u16 vendor, u16 device, u8 revision, char *prod_name)
 	}
 
  out:
-	if (product_str)
-		sprintf(prod_name, "%s", product_str);
+	return product_str;
 }
 
 /**
@@ -1591,7 +1649,6 @@ mpt_mapresources(MPT_ADAPTER *ioc)
 	unsigned long	 port;
 	u32		 msize;
 	u32		 psize;
-	u8		 revision;
 	int		 r = -ENODEV;
 	struct pci_dev *pdev;
 
@@ -1605,10 +1662,8 @@ mpt_mapresources(MPT_ADAPTER *ioc)
 	if (pci_request_selected_regions(pdev, ioc->bars, "mpt")) {
 		printk(MYIOC_s_ERR_FMT "pci_request_selected_regions() with "
 		    "MEM failed\n", ioc->name);
-		return r;
+		goto out_pci_disable_device;
 	}
-
-	pci_read_config_byte(pdev, PCI_CLASS_REVISION, &revision);
 
 	if (sizeof(dma_addr_t) > 4) {
 		const uint64_t required_mask = dma_get_required_mask
@@ -1631,8 +1686,7 @@ mpt_mapresources(MPT_ADAPTER *ioc)
 		} else {
 			printk(MYIOC_s_WARN_FMT "no suitable DMA mask for %s\n",
 			    ioc->name, pci_name(pdev));
-			pci_release_selected_regions(pdev, ioc->bars);
-			return r;
+			goto out_pci_release_region;
 		}
 	} else {
 		if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(32))
@@ -1645,8 +1699,7 @@ mpt_mapresources(MPT_ADAPTER *ioc)
 		} else {
 			printk(MYIOC_s_WARN_FMT "no suitable DMA mask for %s\n",
 			    ioc->name, pci_name(pdev));
-			pci_release_selected_regions(pdev, ioc->bars);
-			return r;
+			goto out_pci_release_region;
 		}
 	}
 
@@ -1676,8 +1729,8 @@ mpt_mapresources(MPT_ADAPTER *ioc)
 	if (mem == NULL) {
 		printk(MYIOC_s_ERR_FMT ": ERROR - Unable to map adapter"
 			" memory!\n", ioc->name);
-		pci_release_selected_regions(pdev, ioc->bars);
-		return -EINVAL;
+		r = -EINVAL;
+		goto out_pci_release_region;
 	}
 	ioc->memmap = mem;
 	dinitprintk(ioc, printk(MYIOC_s_INFO_FMT "mem = %p, mem_phys = %llx\n",
@@ -1691,6 +1744,12 @@ mpt_mapresources(MPT_ADAPTER *ioc)
 	ioc->pio_chip = (SYSIF_REGS __iomem *)port;
 
 	return 0;
+
+out_pci_release_region:
+	pci_release_selected_regions(pdev, ioc->bars);
+out_pci_disable_device:
+	pci_disable_device(pdev);
+	return r;
 }
 
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
@@ -1717,7 +1776,6 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 	MPT_ADAPTER	*ioc;
 	u8		 cb_idx;
 	int		 r = -ENODEV;
-	u8		 revision;
 	u8		 pcixcmd;
 	static int	 mpt_ids = 0;
 #ifdef CONFIG_PROC_FS
@@ -1825,8 +1883,8 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 	dinitprintk(ioc, printk(MYIOC_s_INFO_FMT "facts @ %p, pfacts[0] @ %p\n",
 	    ioc->name, &ioc->facts, &ioc->pfacts[0]));
 
-	pci_read_config_byte(pdev, PCI_CLASS_REVISION, &revision);
-	mpt_get_product_name(pdev->vendor, pdev->device, revision, ioc->prod_name);
+	ioc->prod_name = mpt_get_product_name(pdev->vendor, pdev->device,
+					      pdev->revision);
 
 	switch (pdev->device)
 	{
@@ -1841,7 +1899,7 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 		break;
 
 	case MPI_MANUFACTPAGE_DEVICEID_FC929X:
-		if (revision < XL_929) {
+		if (pdev->revision < XL_929) {
 			/* 929X Chip Fix. Set Split transactions level
 		 	* for PCIX. Set MOST bits to zero.
 		 	*/
@@ -1872,7 +1930,7 @@ mpt_attach(struct pci_dev *pdev, const struct pci_device_id *id)
 		/* 1030 Chip Fix. Disable Split transactions
 		 * for PCIX. Set MOST bits to zero if Rev < C0( = 8).
 		 */
-		if (revision < C0_1030) {
+		if (pdev->revision < C0_1030) {
 			pci_read_config_byte(pdev, 0x6a, &pcixcmd);
 			pcixcmd &= 0x8F;
 			pci_write_config_byte(pdev, 0x6a, pcixcmd);
@@ -3113,12 +3171,7 @@ GetIocFacts(MPT_ADAPTER *ioc, int sleepFlag, int reason)
 			facts->FWImageSize = le32_to_cpu(facts->FWImageSize);
 		}
 
-		sz = facts->FWImageSize;
-		if ( sz & 0x01 )
-			sz += 1;
-		if ( sz & 0x02 )
-			sz += 2;
-		facts->FWImageSize = sz;
+		facts->FWImageSize = ALIGN(facts->FWImageSize, 4);
 
 		if (!facts->RequestFrameSize) {
 			/*  Something is wrong!  */
@@ -6413,8 +6466,20 @@ mpt_config(MPT_ADAPTER *ioc, CONFIGPARMS *pCfg)
 			pReq->Action, ioc->mptbase_cmds.status, timeleft));
 		if (ioc->mptbase_cmds.status & MPT_MGMT_STATUS_DID_IOCRESET)
 			goto out;
-		if (!timeleft)
+		if (!timeleft) {
+			spin_lock_irqsave(&ioc->taskmgmt_lock, flags);
+			if (ioc->ioc_reset_in_progress) {
+				spin_unlock_irqrestore(&ioc->taskmgmt_lock,
+					flags);
+				printk(MYIOC_s_INFO_FMT "%s: host reset in"
+					" progress mpt_config timed out.!!\n",
+					__func__, ioc->name);
+				mutex_unlock(&ioc->mptbase_cmds.mutex);
+				return -EFAULT;
+			}
+			spin_unlock_irqrestore(&ioc->taskmgmt_lock, flags);
 			issue_hard_reset = 1;
+		}
 		goto out;
 	}
 
@@ -6582,7 +6647,7 @@ static int mpt_summary_proc_show(struct seq_file *m, void *v)
 
 static int mpt_summary_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, mpt_summary_proc_show, PDE(inode)->data);
+	return single_open(file, mpt_summary_proc_show, PDE_DATA(inode));
 }
 
 static const struct file_operations mpt_summary_proc_fops = {
@@ -6731,7 +6796,7 @@ static int mpt_iocinfo_proc_show(struct seq_file *m, void *v)
 
 static int mpt_iocinfo_proc_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, mpt_iocinfo_proc_show, PDE(inode)->data);
+	return single_open(file, mpt_iocinfo_proc_show, PDE_DATA(inode));
 }
 
 static const struct file_operations mpt_iocinfo_proc_fops = {
@@ -6933,7 +6998,7 @@ EXPORT_SYMBOL(mpt_halt_firmware);
  *	IOC doesn't reply to any outstanding request. This will transfer IOC
  *	to READY state.
  **/
-int
+static int
 mpt_SoftResetHandler(MPT_ADAPTER *ioc, int sleepFlag)
 {
 	int		 rc;
@@ -7128,7 +7193,18 @@ mpt_HardResetHandler(MPT_ADAPTER *ioc, int sleepFlag)
 	spin_lock_irqsave(&ioc->taskmgmt_lock, flags);
 	if (ioc->ioc_reset_in_progress) {
 		spin_unlock_irqrestore(&ioc->taskmgmt_lock, flags);
-		return 0;
+		ioc->wait_on_reset_completion = 1;
+		do {
+			ssleep(1);
+		} while (ioc->ioc_reset_in_progress == 1);
+		ioc->wait_on_reset_completion = 0;
+		return ioc->reset_status;
+	}
+	if (ioc->wait_on_reset_completion) {
+		spin_unlock_irqrestore(&ioc->taskmgmt_lock, flags);
+		rc = 0;
+		time_count = jiffies;
+		goto exit;
 	}
 	ioc->ioc_reset_in_progress = 1;
 	if (ioc->alt_ioc)
@@ -7165,6 +7241,7 @@ mpt_HardResetHandler(MPT_ADAPTER *ioc, int sleepFlag)
 	ioc->ioc_reset_in_progress = 0;
 	ioc->taskmgmt_quiesce_io = 0;
 	ioc->taskmgmt_in_progress = 0;
+	ioc->reset_status = rc;
 	if (ioc->alt_ioc) {
 		ioc->alt_ioc->ioc_reset_in_progress = 0;
 		ioc->alt_ioc->taskmgmt_quiesce_io = 0;
@@ -7180,7 +7257,7 @@ mpt_HardResetHandler(MPT_ADAPTER *ioc, int sleepFlag)
 					ioc->alt_ioc, MPT_IOC_POST_RESET);
 		}
 	}
-
+exit:
 	dtmprintk(ioc,
 	    printk(MYIOC_s_DEBUG_FMT
 		"HardResetHandler: completed (%d seconds): %s\n", ioc->name,

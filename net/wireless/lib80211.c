@@ -41,37 +41,10 @@ struct lib80211_crypto_alg {
 static LIST_HEAD(lib80211_crypto_algs);
 static DEFINE_SPINLOCK(lib80211_crypto_lock);
 
-const char *print_ssid(char *buf, const char *ssid, u8 ssid_len)
-{
-	const char *s = ssid;
-	char *d = buf;
-
-	ssid_len = min_t(u8, ssid_len, IEEE80211_MAX_SSID_LEN);
-	while (ssid_len--) {
-		if (isprint(*s)) {
-			*d++ = *s++;
-			continue;
-		}
-
-		*d++ = '\\';
-		if (*s == '\0')
-			*d++ = '0';
-		else if (*s == '\n')
-			*d++ = 'n';
-		else if (*s == '\r')
-			*d++ = 'r';
-		else if (*s == '\t')
-			*d++ = 't';
-		else if (*s == '\\')
-			*d++ = '\\';
-		else
-			d += snprintf(d, 3, "%03o", *s);
-		s++;
-	}
-	*d = '\0';
-	return buf;
-}
-EXPORT_SYMBOL(print_ssid);
+static void lib80211_crypt_deinit_entries(struct lib80211_crypt_info *info,
+					  int force);
+static void lib80211_crypt_quiescing(struct lib80211_crypt_info *info);
+static void lib80211_crypt_deinit_handler(unsigned long data);
 
 int lib80211_crypt_info_init(struct lib80211_crypt_info *info, char *name,
 				spinlock_t *lock)
@@ -111,7 +84,8 @@ void lib80211_crypt_info_free(struct lib80211_crypt_info *info)
 }
 EXPORT_SYMBOL(lib80211_crypt_info_free);
 
-void lib80211_crypt_deinit_entries(struct lib80211_crypt_info *info, int force)
+static void lib80211_crypt_deinit_entries(struct lib80211_crypt_info *info,
+					  int force)
 {
 	struct lib80211_crypt_data *entry, *next;
 	unsigned long flags;
@@ -131,10 +105,9 @@ void lib80211_crypt_deinit_entries(struct lib80211_crypt_info *info, int force)
 	}
 	spin_unlock_irqrestore(info->lock, flags);
 }
-EXPORT_SYMBOL(lib80211_crypt_deinit_entries);
 
 /* After this, crypt_deinit_list won't accept new members */
-void lib80211_crypt_quiescing(struct lib80211_crypt_info *info)
+static void lib80211_crypt_quiescing(struct lib80211_crypt_info *info)
 {
 	unsigned long flags;
 
@@ -142,9 +115,8 @@ void lib80211_crypt_quiescing(struct lib80211_crypt_info *info)
 	info->crypt_quiesced = 1;
 	spin_unlock_irqrestore(info->lock, flags);
 }
-EXPORT_SYMBOL(lib80211_crypt_quiescing);
 
-void lib80211_crypt_deinit_handler(unsigned long data)
+static void lib80211_crypt_deinit_handler(unsigned long data)
 {
 	struct lib80211_crypt_info *info = (struct lib80211_crypt_info *)data;
 	unsigned long flags;
@@ -160,7 +132,6 @@ void lib80211_crypt_deinit_handler(unsigned long data)
 	}
 	spin_unlock_irqrestore(info->lock, flags);
 }
-EXPORT_SYMBOL(lib80211_crypt_deinit_handler);
 
 void lib80211_crypt_delayed_deinit(struct lib80211_crypt_info *info,
 				    struct lib80211_crypt_data **crypt)

@@ -4,14 +4,15 @@
  */
 
 #include <linux/mm.h>
+#include <linux/module.h>
 #include <linux/sched.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
-#include "as-layout.h"
-#include "mem_user.h"
-#include "os.h"
-#include "skas.h"
-#include "tlb.h"
+#include <as-layout.h>
+#include <mem_user.h>
+#include <os.h>
+#include <skas.h>
+#include <kern_util.h>
 
 struct host_vm_change {
 	struct host_vm_op {
@@ -75,6 +76,7 @@ static int do_ops(struct host_vm_change *hvc, int end,
 		default:
 			printk(KERN_ERR "Unknown op type %d in do_ops\n",
 			       op->type);
+			BUG();
 			break;
 		}
 	}
@@ -122,6 +124,9 @@ static int add_munmap(unsigned long addr, unsigned long len,
 {
 	struct host_vm_op *last;
 	int ret = 0;
+
+	if ((addr >= STUB_START) && (addr < STUB_END))
+		return -EINVAL;
 
 	if (hvc->index != 0) {
 		last = &hvc->ops[hvc->index - 1];
@@ -282,12 +287,15 @@ void fix_range_common(struct mm_struct *mm, unsigned long start_addr,
 	/* This is not an else because ret is modified above */
 	if (ret) {
 		printk(KERN_ERR "fix_range_common: failed, killing current "
-		       "process\n");
+		       "process: %d\n", task_tgid_vnr(current));
+		/* We are under mmap_sem, release it such that current can terminate */
+		up_write(&current->mm->mmap_sem);
 		force_sig(SIGKILL, current);
+		do_signal();
 	}
 }
 
-int flush_tlb_kernel_range_common(unsigned long start, unsigned long end)
+static int flush_tlb_kernel_range_common(unsigned long start, unsigned long end)
 {
 	struct mm_struct *mm;
 	pgd_t *pgd;
@@ -499,6 +507,7 @@ void flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 		flush_tlb_kernel_range_common(start, end);
 	else fix_range(vma->vm_mm, start, end, 0);
 }
+EXPORT_SYMBOL(flush_tlb_range);
 
 void flush_tlb_mm_range(struct mm_struct *mm, unsigned long start,
 			unsigned long end)

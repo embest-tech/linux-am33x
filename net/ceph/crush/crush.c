@@ -17,6 +17,7 @@ const char *crush_bucket_alg_name(int alg)
 	case CRUSH_BUCKET_LIST: return "list";
 	case CRUSH_BUCKET_TREE: return "tree";
 	case CRUSH_BUCKET_STRAW: return "straw";
+	case CRUSH_BUCKET_STRAW2: return "straw2";
 	default: return "unknown";
 	}
 }
@@ -26,9 +27,9 @@ const char *crush_bucket_alg_name(int alg)
  * @b: bucket pointer
  * @p: item index in bucket
  */
-int crush_get_bucket_item_weight(struct crush_bucket *b, int p)
+int crush_get_bucket_item_weight(const struct crush_bucket *b, int p)
 {
-	if (p >= b->size)
+	if ((__u32)p >= b->size)
 		return 0;
 
 	switch (b->alg) {
@@ -37,36 +38,13 @@ int crush_get_bucket_item_weight(struct crush_bucket *b, int p)
 	case CRUSH_BUCKET_LIST:
 		return ((struct crush_bucket_list *)b)->item_weights[p];
 	case CRUSH_BUCKET_TREE:
-		if (p & 1)
-			return ((struct crush_bucket_tree *)b)->node_weights[p];
-		return 0;
+		return ((struct crush_bucket_tree *)b)->node_weights[crush_calc_tree_node(p)];
 	case CRUSH_BUCKET_STRAW:
 		return ((struct crush_bucket_straw *)b)->item_weights[p];
+	case CRUSH_BUCKET_STRAW2:
+		return ((struct crush_bucket_straw2 *)b)->item_weights[p];
 	}
 	return 0;
-}
-
-/**
- * crush_calc_parents - Calculate parent vectors for the given crush map.
- * @map: crush_map pointer
- */
-void crush_calc_parents(struct crush_map *map)
-{
-	int i, b, c;
-
-	for (b = 0; b < map->max_buckets; b++) {
-		if (map->buckets[b] == NULL)
-			continue;
-		for (i = 0; i < map->buckets[b]->size; i++) {
-			c = map->buckets[b]->items[i];
-			BUG_ON(c >= map->max_devices ||
-			       c < -map->max_buckets);
-			if (c >= 0)
-				map->device_parents[c] = map->buckets[b]->id;
-			else
-				map->bucket_parents[-1-c] = map->buckets[b]->id;
-		}
-	}
 }
 
 void crush_destroy_bucket_uniform(struct crush_bucket_uniform *b)
@@ -87,6 +65,8 @@ void crush_destroy_bucket_list(struct crush_bucket_list *b)
 
 void crush_destroy_bucket_tree(struct crush_bucket_tree *b)
 {
+	kfree(b->h.perm);
+	kfree(b->h.items);
 	kfree(b->node_weights);
 	kfree(b);
 }
@@ -94,6 +74,14 @@ void crush_destroy_bucket_tree(struct crush_bucket_tree *b)
 void crush_destroy_bucket_straw(struct crush_bucket_straw *b)
 {
 	kfree(b->straws);
+	kfree(b->item_weights);
+	kfree(b->h.perm);
+	kfree(b->h.items);
+	kfree(b);
+}
+
+void crush_destroy_bucket_straw2(struct crush_bucket_straw2 *b)
+{
 	kfree(b->item_weights);
 	kfree(b->h.perm);
 	kfree(b->h.items);
@@ -115,6 +103,9 @@ void crush_destroy_bucket(struct crush_bucket *b)
 	case CRUSH_BUCKET_STRAW:
 		crush_destroy_bucket_straw((struct crush_bucket_straw *)b);
 		break;
+	case CRUSH_BUCKET_STRAW2:
+		crush_destroy_bucket_straw2((struct crush_bucket_straw2 *)b);
+		break;
 	}
 }
 
@@ -124,10 +115,9 @@ void crush_destroy_bucket(struct crush_bucket *b)
  */
 void crush_destroy(struct crush_map *map)
 {
-	int b;
-
 	/* buckets */
 	if (map->buckets) {
+		__s32 b;
 		for (b = 0; b < map->max_buckets; b++) {
 			if (map->buckets[b] == NULL)
 				continue;
@@ -138,14 +128,16 @@ void crush_destroy(struct crush_map *map)
 
 	/* rules */
 	if (map->rules) {
+		__u32 b;
 		for (b = 0; b < map->max_rules; b++)
-			kfree(map->rules[b]);
+			crush_destroy_rule(map->rules[b]);
 		kfree(map->rules);
 	}
 
-	kfree(map->bucket_parents);
-	kfree(map->device_parents);
 	kfree(map);
 }
 
-
+void crush_destroy_rule(struct crush_rule *rule)
+{
+	kfree(rule);
+}

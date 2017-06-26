@@ -14,16 +14,19 @@
 #ifndef _UIO_DRIVER_H_
 #define _UIO_DRIVER_H_
 
-#include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/interrupt.h>
 
+struct module;
 struct uio_map;
 
 /**
  * struct uio_mem - description of a UIO memory region
  * @name:		name of the memory region for identification
- * @addr:		address of the device's memory
+ * @addr:		address of the device's memory (phys_addr is used since
+ * 			addr can be logical, virtual, or physical & phys_addr_t
+ * 			should always be large enough to handle any of the
+ * 			address types)
  * @size:		size of IO
  * @memtype:		type of memory addr points to
  * @internal_addr:	ioremap-ped version of addr, for driver internal use
@@ -31,8 +34,8 @@ struct uio_map;
  */
 struct uio_mem {
 	const char		*name;
-	unsigned long		addr;
-	unsigned long		size;
+	phys_addr_t		addr;
+	resource_size_t		size;
 	int			memtype;
 	void __iomem		*internal_addr;
 	struct uio_map		*map;
@@ -60,7 +63,17 @@ struct uio_port {
 
 #define MAX_UIO_PORT_REGIONS	5
 
-struct uio_device;
+struct uio_device {
+        struct module           *owner;
+        struct device           *dev;
+        int                     minor;
+        atomic_t                event;
+        struct fasync_struct    *async_queue;
+        wait_queue_head_t       wait;
+        struct uio_info         *info;
+        struct kobject          *map_dir;
+        struct kobject          *portio_dir;
+};
 
 /**
  * struct uio_info - UIO device capabilities
@@ -98,11 +111,11 @@ extern int __must_check
 	__uio_register_device(struct module *owner,
 			      struct device *parent,
 			      struct uio_info *info);
-static inline int __must_check
-	uio_register_device(struct device *parent, struct uio_info *info)
-{
-	return __uio_register_device(THIS_MODULE, parent, info);
-}
+
+/* use a define to avoid include chaining to get THIS_MODULE */
+#define uio_register_device(parent, info) \
+	__uio_register_device(THIS_MODULE, parent, info)
+
 extern void uio_unregister_device(struct uio_info *info);
 extern void uio_event_notify(struct uio_info *info);
 

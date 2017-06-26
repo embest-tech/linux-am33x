@@ -13,9 +13,7 @@
 	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, write to the
-	Free Software Foundation, Inc.,
-	59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+	along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -288,8 +286,8 @@ enum txentry_desc_flags {
  * @signal: PLCP signal.
  * @service: PLCP service.
  * @msc: MCS.
- * @stbc: STBC.
- * @ba_size: BA size.
+ * @stbc: Use Space Time Block Coding (only available for MCS rates < 8).
+ * @ba_size: Size of the recepients RX reorder buffer - 1.
  * @rate_mode: Rate mode (See @enum rate_modulation).
  * @mpdu_density: MDPU density.
  * @retry_limit: Max number of retries.
@@ -321,6 +319,7 @@ struct txentry_desc {
 			u8 ba_size;
 			u8 mpdu_density;
 			enum txop txop;
+			int wcid;
 		} ht;
 	} u;
 
@@ -354,10 +353,12 @@ struct txentry_desc {
  */
 enum queue_entry_flags {
 	ENTRY_BCN_ASSIGNED,
+	ENTRY_BCN_ENABLED,
 	ENTRY_OWNER_DEVICE_DATA,
 	ENTRY_DATA_PENDING,
 	ENTRY_DATA_IO_FAILED,
 	ENTRY_DATA_STATUS_PENDING,
+	ENTRY_DATA_STATUS_SET,
 };
 
 /**
@@ -371,6 +372,7 @@ enum queue_entry_flags {
  * @entry_idx: The entry index number.
  * @priv_data: Private data belonging to this queue entry. The pointer
  *	points to data specific to a particular driver and queue type.
+ * @status: Device specific status
  */
 struct queue_entry {
 	unsigned long flags;
@@ -381,6 +383,8 @@ struct queue_entry {
 	struct sk_buff *skb;
 
 	unsigned int entry_idx;
+
+	u32 status;
 
 	void *priv_data;
 };
@@ -448,6 +452,7 @@ enum data_queue_flags {
  * @cw_max: The cw max value for outgoing frames (field ignored in RX queue).
  * @data_size: Maximum data size for the frames in this queue.
  * @desc_size: Hardware descriptor size for the data in this queue.
+ * @priv_size: Size of per-queue_entry private data.
  * @usb_endpoint: Device endpoint used for communication (USB only)
  * @usb_maxpacket: Max packet size for given endpoint (USB only)
  */
@@ -474,28 +479,12 @@ struct data_queue {
 	unsigned short cw_max;
 
 	unsigned short data_size;
-	unsigned short desc_size;
+	unsigned char  desc_size;
+	unsigned char  winfo_size;
+	unsigned short priv_size;
 
 	unsigned short usb_endpoint;
 	unsigned short usb_maxpacket;
-};
-
-/**
- * struct data_queue_desc: Data queue description
- *
- * The information in this structure is used by drivers
- * to inform rt2x00lib about the creation of the data queue.
- *
- * @entry_num: Maximum number of entries for a queue.
- * @data_size: Maximum data size for the frames in this queue.
- * @desc_size: Hardware descriptor size for the data in this queue.
- * @priv_size: Size of per-queue_entry private data.
- */
-struct data_queue_desc {
-	unsigned short entry_num;
-	unsigned short data_size;
-	unsigned short desc_size;
-	unsigned short priv_size;
 };
 
 /**
@@ -635,18 +624,6 @@ static inline int rt2x00queue_threshold(struct data_queue *queue)
 {
 	return rt2x00queue_available(queue) < queue->threshold;
 }
-
-/**
- * rt2x00queue_status_timeout - Check if a timeout occurred for STATUS reports
- * @entry: Queue entry to check.
- */
-static inline int rt2x00queue_status_timeout(struct queue_entry *entry)
-{
-	if (!test_bit(ENTRY_DATA_STATUS_PENDING, &entry->flags))
-		return false;
-	return time_after(jiffies, entry->last_action + msecs_to_jiffies(100));
-}
-
 /**
  * rt2x00queue_dma_timeout - Check if a timeout occurred for DMA transfers
  * @entry: Queue entry to check.

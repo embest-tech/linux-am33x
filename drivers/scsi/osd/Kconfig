@@ -4,17 +4,13 @@
 # Copyright (C) 2008 Panasas Inc.  All rights reserved.
 #
 # Authors:
-#   Boaz Harrosh <bharrosh@panasas.com>
+#   Boaz Harrosh <ooo@electrozaur.com>
 #   Benny Halevy <bhalevy@panasas.com>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public version 2 License as
 # published by the Free Software Foundation
 #
-# FIXME: SCSI_OSD_INITIATOR should select CONFIG (HMAC) SHA1 somehow.
-#        How is it done properly?
-#
-
 config SCSI_OSD_INITIATOR
 	tristate "OSD-Initiator library"
 	depends on SCSI

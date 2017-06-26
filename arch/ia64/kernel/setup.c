@@ -59,7 +59,6 @@
 #include <asm/sections.h>
 #include <asm/setup.h>
 #include <asm/smp.h>
-#include <asm/system.h>
 #include <asm/tlbflush.h>
 #include <asm/unistd.h>
 #include <asm/hpsim.h>
@@ -220,6 +219,23 @@ sort_regions (struct rsvd_region *rsvd_region, int max)
 	}
 }
 
+/* merge overlaps */
+static int __init
+merge_regions (struct rsvd_region *rsvd_region, int max)
+{
+	int i;
+	for (i = 1; i < max; ++i) {
+		if (rsvd_region[i].start >= rsvd_region[i-1].end)
+			continue;
+		if (rsvd_region[i].end > rsvd_region[i-1].end)
+			rsvd_region[i-1].end = rsvd_region[i].end;
+		--max;
+		memmove(&rsvd_region[i], &rsvd_region[i+1],
+			(max - i) * sizeof(struct rsvd_region));
+	}
+	return max;
+}
+
 /*
  * Request address space for all standard resources
  */
@@ -270,6 +286,7 @@ static void __init setup_crashkernel(unsigned long total, int *n)
 	if (ret == 0 && size > 0) {
 		if (!base) {
 			sort_regions(rsvd_region, *n);
+			*n = merge_regions(rsvd_region, *n);
 			base = kdump_find_rsvd_region(size,
 					rsvd_region, *n);
 		}
@@ -373,6 +390,7 @@ reserve_memory (void)
 	BUG_ON(IA64_MAX_RSVD_REGIONS + 1 < n);
 
 	sort_regions(rsvd_region, num_rsvd_regions);
+	num_rsvd_regions = merge_regions(rsvd_region, num_rsvd_regions);
 }
 
 
@@ -467,7 +485,7 @@ mark_bsp_online (void)
 {
 #ifdef CONFIG_SMP
 	/* If we register an early console, allow CPU 0 to printk */
-	cpu_set(smp_processor_id(), cpu_online_map);
+	set_cpu_online(smp_processor_id(), true);
 #endif
 }
 
@@ -544,8 +562,8 @@ setup_arch (char **cmdline_p)
 #  ifdef CONFIG_ACPI_HOTPLUG_CPU
 	prefill_possible_map();
 #  endif
-	per_cpu_scan_finalize((cpus_weight(early_cpu_possible_map) == 0 ?
-		32 : cpus_weight(early_cpu_possible_map)),
+	per_cpu_scan_finalize((cpumask_weight(&early_cpu_possible_map) == 0 ?
+		32 : cpumask_weight(&early_cpu_possible_map)),
 		additional_cpus > 0 ? additional_cpus : 0);
 # endif
 #endif /* CONFIG_APCI_BOOT */
@@ -684,7 +702,8 @@ show_cpuinfo (struct seq_file *m, void *v)
 		   c->itc_freq / 1000000, c->itc_freq % 1000000,
 		   lpj*HZ/500000, (lpj*HZ/5000) % 100);
 #ifdef CONFIG_SMP
-	seq_printf(m, "siblings   : %u\n", cpus_weight(cpu_core_map[cpunum]));
+	seq_printf(m, "siblings   : %u\n",
+		   cpumask_weight(&cpu_core_map[cpunum]));
 	if (c->socket_id != -1)
 		seq_printf(m, "physical id: %u\n", c->socket_id);
 	if (c->threads_per_core > 1 || c->cores_per_socket > 1)
@@ -730,7 +749,7 @@ const struct seq_operations cpuinfo_op = {
 #define MAX_BRANDS	8
 static char brandname[MAX_BRANDS][128];
 
-static char * __cpuinit
+static char *
 get_model_name(__u8 family, __u8 model)
 {
 	static int overflow;
@@ -760,7 +779,7 @@ get_model_name(__u8 family, __u8 model)
 	return "Unknown";
 }
 
-static void __cpuinit
+static void
 identify_cpu (struct cpuinfo_ia64 *c)
 {
 	union {
@@ -832,7 +851,7 @@ identify_cpu (struct cpuinfo_ia64 *c)
  * 2. the minimum of the i-cache stride sizes for "flush_icache_range()".
  * 3. the minimum of the cache stride sizes for "clflush_cache_range()".
  */
-static void __cpuinit
+static void
 get_cache_info(void)
 {
 	unsigned long line_size, max = 1;
@@ -897,10 +916,10 @@ get_cache_info(void)
  * cpu_init() initializes state that is per-CPU.  This function acts
  * as a 'CPU state barrier', nothing should get across.
  */
-void __cpuinit
+void
 cpu_init (void)
 {
-	extern void __cpuinit ia64_mmu_init (void *);
+	extern void ia64_mmu_init(void *);
 	static unsigned long max_num_phys_stacked = IA64_NUM_PHYS_STACK_REG;
 	unsigned long num_phys_stacked;
 	pal_vm_info_2_u_t vmi;
@@ -915,8 +934,8 @@ cpu_init (void)
 	 * (must be done after per_cpu area is setup)
 	 */
 	if (smp_processor_id() == 0) {
-		cpu_set(0, per_cpu(cpu_sibling_map, 0));
-		cpu_set(0, cpu_core_map[0]);
+		cpumask_set_cpu(0, &per_cpu(cpu_sibling_map, 0));
+		cpumask_set_cpu(0, &cpu_core_map[0]);
 	} else {
 		/*
 		 * Set ar.k3 so that assembly code in MCA handler can compute
@@ -1033,7 +1052,6 @@ cpu_init (void)
 		max_num_phys_stacked = num_phys_stacked;
 	}
 	platform_cpu_init();
-	pm_idle = default_idle;
 }
 
 void __init
@@ -1046,6 +1064,8 @@ check_bugs (void)
 static int __init run_dmi_scan(void)
 {
 	dmi_scan_machine();
+	dmi_memdev_walk();
+	dmi_set_dump_stack_arch_desc();
 	return 0;
 }
 core_initcall(run_dmi_scan);

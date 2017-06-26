@@ -12,7 +12,6 @@
 
 #include <linux/kernel.h>
 #include <linux/errno.h>
-#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/string.h>
@@ -24,7 +23,7 @@
 
 #define VENDOR_ID	0x0fc5
 #define PRODUCT_ID	0x1227
-#define MAXLEN		6
+#define MAXLEN		8
 
 /* table of devices that work with this driver */
 static const struct usb_device_id id_table[] = {
@@ -57,7 +56,7 @@ struct usb_sevsegdev {
  * if str commands are used, we would assume the end of string
  * so mem commands are used.
  */
-inline size_t my_memlen(const char *buf, size_t count)
+static inline size_t my_memlen(const char *buf, size_t count)
 {
 	if (count > 0 && buf[count-1] == '\n')
 		return count - 1;
@@ -437,23 +436,7 @@ static struct usb_driver sevseg_driver = {
 	.supports_autosuspend = 1,
 };
 
-static int __init usb_sevseg_init(void)
-{
-	int rc = 0;
-
-	rc = usb_register(&sevseg_driver);
-	if (rc)
-		err("usb_register failed. Error number %d", rc);
-	return rc;
-}
-
-static void __exit usb_sevseg_exit(void)
-{
-	usb_deregister(&sevseg_driver);
-}
-
-module_init(usb_sevseg_init);
-module_exit(usb_sevseg_exit);
+module_usb_driver(sevseg_driver);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

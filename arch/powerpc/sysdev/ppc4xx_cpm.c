@@ -179,12 +179,12 @@ static struct kobj_attribute cpm_idle_attr =
 
 static void cpm_idle_config_sysfs(void)
 {
-	struct sys_device *sys_dev;
+	struct device *dev;
 	unsigned long ret;
 
-	sys_dev = get_cpu_sysdev(0);
+	dev = get_cpu_device(0);
 
-	ret = sysfs_create_file(&sys_dev->kobj,
+	ret = sysfs_create_file(&dev->kobj,
 				&cpm_idle_attr.attr);
 	if (ret)
 		printk(KERN_WARNING
@@ -281,7 +281,7 @@ static int __init cpm_init(void)
 		printk(KERN_ERR "cpm: could not parse dcr property for %s\n",
 		       np->full_name);
 		ret = -EINVAL;
-		goto out;
+		goto node_put;
 	}
 
 	cpm.dcr_host = dcr_map(np, dcr_base, dcr_len);
@@ -290,7 +290,7 @@ static int __init cpm_init(void)
 		printk(KERN_ERR "cpm: failed to map dcr property for %s\n",
 		       np->full_name);
 		ret = -EINVAL;
-		goto out;
+		goto node_put;
 	}
 
 	/* All 4xx SoCs with a CPM controller have one of two
@@ -330,9 +330,9 @@ static int __init cpm_init(void)
 
 	if (cpm.standby || cpm.suspend)
 		suspend_set_ops(&cpm_suspend_ops);
+node_put:
+	of_node_put(np);
 out:
-	if (np)
-		of_node_put(np);
 	return ret;
 }
 

@@ -1,8 +1,6 @@
 /*
- *  arch/s390/kernel/cpcmd.c
- *
  *  S390 version
- *    Copyright IBM Corp. 1999,2007
+ *    Copyright IBM Corp. 1999, 2007
  *    Author(s): Martin Schwidefsky (schwidefsky@de.ibm.com),
  *               Christian Borntraeger (cborntra@de.ibm.com),
  */
@@ -18,7 +16,6 @@
 #include <linux/string.h>
 #include <asm/ebcdic.h>
 #include <asm/cpcmd.h>
-#include <asm/system.h>
 #include <asm/io.h>
 
 static DEFINE_SPINLOCK(cpcmd_lock);
@@ -30,13 +27,9 @@ static int diag8_noresponse(int cmdlen)
 	register unsigned long reg3 asm ("3") = cmdlen;
 
 	asm volatile(
-#ifndef CONFIG_64BIT
-		"	diag	%1,%0,0x8\n"
-#else /* CONFIG_64BIT */
 		"	sam31\n"
 		"	diag	%1,%0,0x8\n"
 		"	sam64\n"
-#endif /* CONFIG_64BIT */
 		: "+d" (reg3) : "d" (reg2) : "cc");
 	return reg3;
 }
@@ -49,17 +42,11 @@ static int diag8_response(int cmdlen, char *response, int *rlen)
 	register unsigned long reg5 asm ("5") = *rlen;
 
 	asm volatile(
-#ifndef CONFIG_64BIT
-		"	diag	%2,%0,0x8\n"
-		"	brc	8,1f\n"
-		"	ar	%1,%4\n"
-#else /* CONFIG_64BIT */
 		"	sam31\n"
 		"	diag	%2,%0,0x8\n"
 		"	sam64\n"
 		"	brc	8,1f\n"
 		"	agr	%1,%4\n"
-#endif /* CONFIG_64BIT */
 		"1:\n"
 		: "+d" (reg4), "+d" (reg5)
 		: "d" (reg2), "d" (reg3), "d" (*rlen) : "cc");

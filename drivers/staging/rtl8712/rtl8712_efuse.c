@@ -219,19 +219,18 @@ u16 r8712_efuse_get_current_size(struct _adapter *padapter)
 {
 	int bContinual = true;
 	u16 efuse_addr = 0;
-	u8 hoffset = 0, hworden = 0;
+	u8 hworden = 0;
 	u8 efuse_data, word_cnts = 0;
 
 	while (bContinual && efuse_one_byte_read(padapter, efuse_addr,
 	       &efuse_data) && (efuse_addr < efuse_available_max_size)) {
 		if (efuse_data != 0xFF) {
-			hoffset = (efuse_data >> 4) & 0x0F;
 			hworden =  efuse_data & 0x0F;
 			word_cnts = calculate_word_cnts(hworden);
 			/* read next header */
 			efuse_addr = efuse_addr + (word_cnts * 2) + 1;
 		} else
-			bContinual = false ;
+			bContinual = false;
 	}
 	return efuse_addr;
 }
@@ -307,21 +306,25 @@ static u8 fix_header(struct _adapter *padapter, u8 header, u16 header_addr)
 			continue;
 		}
 		for (i = 0; i < PGPKG_MAX_WORDS; i++) {
-			if (BIT(i) & word_en)
-				continue;
-			if (!(BIT(i) & pkt.word_en)) {
-				if (efuse_one_byte_read(padapter, addr,
-				    &value) == true)
-					pkt.data[i*2] = value;
-				else
-					return false;
-				if (efuse_one_byte_read(padapter, addr + 1,
-				    &value) == true)
-					pkt.data[i*2 + 1] = value;
-				else
-					return false;
+			if (BIT(i) & word_en) {
+				if (BIT(i) & pkt.word_en) {
+					if (efuse_one_byte_read(
+							padapter, addr,
+							&value) == true)
+						pkt.data[i*2] = value;
+					else
+						return false;
+					if (efuse_one_byte_read(
+							padapter,
+							addr + 1,
+							&value) == true)
+						pkt.data[i*2 + 1] =
+							value;
+					else
+						return false;
+				}
+				addr += 2;
 			}
-			addr += 2;
 		}
 	}
 	if (addr != header_addr)
@@ -329,26 +332,29 @@ static u8 fix_header(struct _adapter *padapter, u8 header, u16 header_addr)
 	addr++;
 	/* fill original data */
 	for (i = 0; i < PGPKG_MAX_WORDS; i++) {
-		if (BIT(i) & pkt.word_en)
-			continue;
-		efuse_one_byte_write(padapter, addr, pkt.data[i*2]);
-		efuse_one_byte_write(padapter, addr+1, pkt.data[i*2 + 1]);
-		/* additional check */
-		if (efuse_one_byte_read(padapter, addr, &value) == false)
-			ret = false;
-		else if (pkt.data[i*2] != value) {
-			ret = false;
-			if (0xFF == value) /* write again */
-				efuse_one_byte_write(padapter, addr,
-						     pkt.data[i * 2]);
-		}
-		if (efuse_one_byte_read(padapter, addr+1, &value) == false)
-			ret = false;
-		else if (pkt.data[i*2 + 1] != value) {
-			ret = false;
-			if (0xFF == value) /* write again */
-				efuse_one_byte_write(padapter, addr+1,
-						     pkt.data[i*2 + 1]);
+		if (BIT(i) & pkt.word_en) {
+			efuse_one_byte_write(padapter, addr, pkt.data[i*2]);
+			efuse_one_byte_write(padapter, addr+1,
+					pkt.data[i*2 + 1]);
+			/* additional check */
+			if (efuse_one_byte_read(padapter, addr, &value)
+				== false)
+				ret = false;
+			else if (pkt.data[i*2] != value) {
+				ret = false;
+				if (0xFF == value) /* write again */
+					efuse_one_byte_write(padapter, addr,
+							pkt.data[i * 2]);
+			}
+			if (efuse_one_byte_read(padapter, addr+1, &value) ==
+				false)
+				ret = false;
+			else if (pkt.data[i*2 + 1] != value) {
+				ret = false;
+				if (0xFF == value) /* write again */
+					efuse_one_byte_write(padapter, addr+1,
+							pkt.data[i*2 + 1]);
+			}
 		}
 		addr += 2;
 	}
@@ -407,19 +413,18 @@ u8 r8712_efuse_pg_packet_write(struct _adapter *padapter, const u8 offset,
 					bResult = false;
 			}
 			break;
-		} else { /* write header fail */
-			bResult = false;
-			if (0xFF == efuse_data)
-				return bResult; /* not thing damaged. */
-			/* call rescue procedure */
-			if (fix_header(padapter, efuse_data, efuse_addr) ==
-			    false)
-				return false; /* rescue fail */
-
-			if (++repeat_times > _REPEAT_THRESHOLD_) /* fail */
-				break;
-			/* otherwise, take another risk... */
 		}
+		/* write header fail */
+		bResult = false;
+		if (0xFF == efuse_data)
+			return bResult; /* nothing damaged. */
+		/* call rescue procedure */
+		if (!fix_header(padapter, efuse_data, efuse_addr))
+			return false; /* rescue fail */
+
+		if (++repeat_times > _REPEAT_THRESHOLD_) /* fail */
+			break;
+		/* otherwise, take another risk... */
 	}
 	return bResult;
 }
@@ -534,15 +539,16 @@ u8 r8712_efuse_map_write(struct _adapter *padapter, u16 addr, u16 cnts,
 				}
 				idx++;
 				break;
-			} else {
-				if ((data[idx] != pktdata[i]) || (data[idx+1] !=
-				     pktdata[i+1])) {
-					word_en &= ~BIT(i >> 1);
-					newdata[j++] = data[idx];
-					newdata[j++] = data[idx + 1];
-				}
-				idx += 2;
 			}
+
+			if ((data[idx] != pktdata[i]) || (data[idx+1] !=
+			     pktdata[i+1])) {
+				word_en &= ~BIT(i >> 1);
+				newdata[j++] = data[idx];
+				newdata[j++] = data[idx + 1];
+			}
+			idx += 2;
+
 			if (idx == cnts)
 				break;
 		}

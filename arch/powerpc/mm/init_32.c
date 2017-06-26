@@ -26,12 +26,13 @@
 #include <linux/mm.h>
 #include <linux/stddef.h>
 #include <linux/init.h>
-#include <linux/bootmem.h>
 #include <linux/highmem.h>
 #include <linux/initrd.h>
 #include <linux/pagemap.h>
 #include <linux/memblock.h>
 #include <linux/gfp.h>
+#include <linux/slab.h>
+#include <linux/hugetlb.h>
 
 #include <asm/pgalloc.h>
 #include <asm/prom.h>
@@ -43,14 +44,14 @@
 #include <asm/btext.h>
 #include <asm/tlb.h>
 #include <asm/sections.h>
-#include <asm/system.h>
+#include <asm/hugetlb.h>
 
 #include "mmu_decl.h"
 
 #if defined(CONFIG_KERNEL_START_BOOL) || defined(CONFIG_LOWMEM_SIZE_BOOL)
 /* The amount of lowmem must be within 0xF0000000 - KERNELBASE. */
 #if (CONFIG_LOWMEM_SIZE > (0xF0000000 - PAGE_OFFSET))
-#error "You must adjust CONFIG_LOWMEM_SIZE or CONFIG_START_KERNEL"
+#error "You must adjust CONFIG_LOWMEM_SIZE or CONFIG_KERNEL_START"
 #endif
 #endif
 #define MAX_LOW_MEM	CONFIG_LOWMEM_SIZE
@@ -62,6 +63,13 @@ phys_addr_t memstart_addr = (phys_addr_t)~0ull;
 EXPORT_SYMBOL(memstart_addr);
 phys_addr_t kernstart_addr;
 EXPORT_SYMBOL(kernstart_addr);
+
+#ifdef CONFIG_RELOCATABLE_PPC32
+/* Used in __va()/__pa() */
+long long virt_phys_offset;
+EXPORT_SYMBOL(virt_phys_offset);
+#endif
+
 phys_addr_t lowmem_end_addr;
 
 int boot_mapsize;
@@ -94,14 +102,14 @@ unsigned long __max_low_memory = MAX_LOW_MEM;
 /*
  * Check for command-line options that affect what MMU_init will do.
  */
-void MMU_setup(void)
+void __init MMU_setup(void)
 {
 	/* Check for nobats option (used in mapin_ram). */
-	if (strstr(cmd_line, "nobats")) {
+	if (strstr(boot_command_line, "nobats")) {
 		__map_without_bats = 1;
 	}
 
-	if (strstr(cmd_line, "noltlbs")) {
+	if (strstr(boot_command_line, "noltlbs")) {
 		__map_without_ltlbs = 1;
 	}
 #ifdef CONFIG_DEBUG_PAGEALLOC
@@ -123,10 +131,15 @@ void __init MMU_init(void)
 	/* parse args from command line */
 	MMU_setup();
 
+	/*
+	 * Reserve gigantic pages for hugetlb.  This MUST occur before
+	 * lowmem_end_addr is initialized below.
+	 */
+	reserve_hugetlb_gpages();
+
 	if (memblock.memory.cnt > 1) {
 #ifndef CONFIG_WII
-		memblock.memory.cnt = 1;
-		memblock_analyze();
+		memblock_enforce_memory_limit(memblock.memory.regions[0].size);
 		printk(KERN_WARNING "Only using first contiguous memory region");
 #else
 		wii_memory_fixups();
@@ -149,7 +162,6 @@ void __init MMU_init(void)
 #ifndef CONFIG_HIGHMEM
 		total_memory = total_lowmem;
 		memblock_enforce_memory_limit(total_lowmem);
-		memblock_analyze();
 #endif /* CONFIG_HIGHMEM */
 	}
 
@@ -182,15 +194,6 @@ void __init MMU_init(void)
 	memblock_set_current_limit(lowmem_end_addr);
 }
 
-/* This is only called until mem_init is done. */
-void __init *early_get_page(void)
-{
-	if (init_bootmem_done)
-		return alloc_bootmem_pages(PAGE_SIZE);
-	else
-		return __va(memblock_alloc(PAGE_SIZE, PAGE_SIZE));
-}
-
 #ifdef CONFIG_8xx /* No 8xx specific .c file to put that in ... */
 void setup_initial_memory_limit(phys_addr_t first_memblock_base,
 				phys_addr_t first_memblock_size)
@@ -200,7 +203,12 @@ void setup_initial_memory_limit(phys_addr_t first_memblock_base,
 	 */
 	BUG_ON(first_memblock_base != 0);
 
+#ifdef CONFIG_PIN_TLB
+	/* 8xx can only access 24MB at the moment */
+	memblock_set_current_limit(min_t(u64, first_memblock_size, 0x01800000));
+#else
 	/* 8xx can only access 8MB at the moment */
 	memblock_set_current_limit(min_t(u64, first_memblock_size, 0x00800000));
+#endif
 }
 #endif /* CONFIG_8xx */

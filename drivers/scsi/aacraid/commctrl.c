@@ -318,7 +318,8 @@ return_fib:
 			kthread_stop(dev->thread);
 			ssleep(1);
 			dev->aif_thread = 0;
-			dev->thread = kthread_run(aac_command_thread, dev, dev->name);
+			dev->thread = kthread_run(aac_command_thread, dev,
+						  "%s", dev->name);
 			ssleep(1);
 		}
 		if (f.wait) {
@@ -498,6 +499,8 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
 		return -ENOMEM;
 	}
 	aac_fib_init(srbfib);
+	/* raw_srb FIB is not FastResponseCapable */
+	srbfib->hw_fib_va->header.XferState &= ~cpu_to_le32(FastResponseCapable);
 
 	srbcmd = (struct aac_srb*) fib_data(srbfib);
 
@@ -508,7 +511,8 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
 		goto cleanup;
 	}
 
-	if (fibsize > (dev->max_fib_size - sizeof(struct aac_fibhdr))) {
+	if ((fibsize < (sizeof(struct user_aac_srb) - sizeof(struct user_sgentry))) ||
+	    (fibsize > (dev->max_fib_size - sizeof(struct aac_fibhdr)))) {
 		rcode = -EINVAL;
 		goto cleanup;
 	}
@@ -650,6 +654,7 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
 				     AAC_OPT_NEW_COMM) ?
 				      (dev->scsi_host_ptr->max_sectors << 9) :
 				      65536)) {
+					kfree(usg);
 					rcode = -EINVAL;
 					goto cleanup;
 				}
@@ -684,7 +689,10 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
 			kfree (usg);
 		}
 		srbcmd->count = cpu_to_le32(byte_count);
-		psg->count = cpu_to_le32(sg_indx+1);
+		if (user_srbcmd->sg.count)
+			psg->count = cpu_to_le32(sg_indx+1);
+		else
+			psg->count = 0;
 		status = aac_fib_send(ScsiPortCommand64, srbfib, actual_fibsize, FsaNormal, 1, 1,NULL,NULL);
 	} else {
 		struct user_sgmap* upsg = &user_srbcmd->sg;
@@ -770,7 +778,10 @@ static int aac_send_raw_srb(struct aac_dev* dev, void __user * arg)
 			}
 		}
 		srbcmd->count = cpu_to_le32(byte_count);
-		psg->count = cpu_to_le32(sg_indx+1);
+		if (user_srbcmd->sg.count)
+			psg->count = cpu_to_le32(sg_indx+1);
+		else
+			psg->count = 0;
 		status = aac_fib_send(ScsiPortCommand, srbfib, actual_fibsize, FsaNormal, 1, 1, NULL, NULL);
 	}
 	if (status == -ERESTARTSYS) {

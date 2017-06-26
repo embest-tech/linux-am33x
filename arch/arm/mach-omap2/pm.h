@@ -15,16 +15,45 @@
 
 #include "powerdomain.h"
 
+#ifdef CONFIG_CPU_IDLE
+extern int am33xx_idle_init(bool ddr3, void (*do_idle)(u32 wfi_flags));
+extern int am437x_idle_init(void);
+extern int __init omap3_idle_init(void);
+extern int __init omap4_idle_init(void);
+#else
+static inline int am33xx_idle_init(bool ddr3, void (*do_sram_cpuidle)
+				   (u32 wfi_flags))
+{
+	return 0;
+}
+
+static inline int am437x_idle_init(void)
+{
+	return 0;
+}
+
+static inline int omap3_idle_init(void)
+{
+	return 0;
+}
+
+static inline int omap4_idle_init(void)
+{
+	return 0;
+}
+#endif
+
 extern void *omap3_secure_ram_storage;
 extern void omap3_pm_off_mode_enable(int);
 extern void omap_sram_idle(void);
-extern int omap3_can_sleep(void);
-extern int omap_set_pwrdm_state(struct powerdomain *pwrdm, u32 state);
-extern int omap3_idle_init(void);
+extern int omap_pm_clkdms_setup(struct clockdomain *clkdm, void *unused);
 
 #if defined(CONFIG_PM_OPP)
 extern int omap3_opp_init(void);
 extern int omap4_opp_init(void);
+extern int am33xx_opp_init(void);
+extern int am43xx_opp_init(void);
+extern int dra7xx_opp_init(void);
 #else
 static inline int omap3_opp_init(void)
 {
@@ -34,26 +63,17 @@ static inline int omap4_opp_init(void)
 {
 	return -EINVAL;
 }
-#endif
-
-/*
- * cpuidle mach specific parameters
- *
- * The board code can override the default C-states definition using
- * omap3_pm_init_cpuidle
- */
-struct cpuidle_params {
-	u32 exit_latency;	/* exit_latency = sleep + wake-up latencies */
-	u32 target_residency;
-	u8 valid;		/* validates the C-state */
-};
-
-#if defined(CONFIG_PM) && defined(CONFIG_CPU_IDLE)
-extern void omap3_pm_init_cpuidle(struct cpuidle_params *cpuidle_board_params);
-#else
-static
-inline void omap3_pm_init_cpuidle(struct cpuidle_params *cpuidle_board_params)
+static inline int am33xx_opp_init(void)
 {
+	return -EINVAL;
+}
+static inline int am43xx_opp_init(void)
+{
+	return -EINVAL;
+}
+static inline int dra7xx_opp_init(void)
+{
+	return -EINVAL;
 }
 #endif
 
@@ -89,6 +109,42 @@ extern unsigned int omap3_do_wfi_sz;
 /* ... and its pointer from SRAM after copy */
 extern void (*omap3_do_wfi_sram)(void);
 
+/* for sharing core pm ops with amx3 pm modules */
+struct am33xx_pm_ops {
+	int	(*init)(void (*do_sram_cpuidle)(u32 wfi_flags));
+	int	(*soc_suspend)(unsigned int state, int (*fn)(unsigned long),
+			       unsigned long args);
+	int	(*cpu_suspend)(int (*fn)(unsigned long), unsigned long args);
+	void (*save_context)(void);
+	void (*restore_context)(void);
+	void (*prepare_rtc_suspend)(void);
+	void (*prepare_rtc_resume)(void);
+	int (*check_off_mode_enable)(void);
+	void __iomem *(*get_rtc_base_addr)(void);
+};
+
+/* for sharing asm function addrs with amx3 pm modules */
+struct am33xx_pm_sram_addr {
+	void (*do_wfi)(void);
+	unsigned long *do_wfi_sz;
+	unsigned long *resume_offset;
+	unsigned long *emif_sram_table;
+	unsigned long *rtc_base_virt;
+	phys_addr_t rtc_resume_phys_addr;
+};
+
+struct am33xx_pm_ops *amx3_get_pm_ops(void);
+struct am33xx_pm_sram_addr *amx3_get_sram_addrs(void);
+
+#define WFI_FLAG_SELF_REFRESH		(1 << 2)
+#define WFI_FLAG_SAVE_EMIF		(1 << 3)
+#define WFI_FLAG_WAKE_M3		(1 << 4)
+#define WFI_FLAG_DISABLE_EMIF		(1 << 7)
+#define WFI_FLAG_RTC_ONLY		(1 << 8)
+
+extern struct am33xx_pm_sram_addr am33xx_pm_sram;
+extern struct am33xx_pm_sram_addr am43xx_pm_sram;
+
 /* save_secure_ram_context function pointer and size, for copy to SRAM */
 extern int save_secure_ram_context(u32 *addr);
 extern unsigned int save_secure_ram_context_sz;
@@ -97,6 +153,7 @@ extern void omap3_save_scratchpad_contents(void);
 
 #define PM_RTA_ERRATUM_i608		(1 << 0)
 #define PM_SDRC_WAKEUP_ERRATUM_i583	(1 << 1)
+#define PM_PER_MEMORIES_ERRATUM_i582	(1 << 2)
 
 #if defined(CONFIG_PM) && defined(CONFIG_ARCH_OMAP3)
 extern u16 pm34xx_errata;
@@ -107,7 +164,18 @@ extern void enable_omap3630_toggle_l2_on_restore(void);
 static inline void enable_omap3630_toggle_l2_on_restore(void) { }
 #endif		/* defined(CONFIG_PM) && defined(CONFIG_ARCH_OMAP3) */
 
-#ifdef CONFIG_OMAP_SMARTREFLEX
+#define PM_OMAP4_ROM_SMP_BOOT_ERRATUM_GICD	(1 << 0)
+#define PM_OMAP4_CPU_OSWR_DISABLE		(1 << 1)
+
+#if defined(CONFIG_PM) && (defined(CONFIG_ARCH_OMAP4) ||\
+	   defined(CONFIG_SOC_OMAP5) || defined (CONFIG_SOC_DRA7XX))
+extern u16 pm44xx_errata;
+#define IS_PM44XX_ERRATUM(id)		(pm44xx_errata & (id))
+#else
+#define IS_PM44XX_ERRATUM(id)		0
+#endif
+
+#ifdef CONFIG_POWER_AVS_OMAP
 extern int omap_devinit_smartreflex(void);
 extern void omap_enable_smartreflex_on_init(void);
 #else
@@ -135,21 +203,22 @@ static inline int omap4_twl_init(void)
 #endif
 
 #ifdef CONFIG_PM
-extern bool omap_pm_is_ready_status;
-/**
- * omap_pm_is_ready() - tells if OMAP pm framework is done it's initialization
- *
- * In few cases, to sequence operations properly, we'd like to know if OMAP's PM
- * framework has completed all it's expected initializations.
- */
-static inline bool omap_pm_is_ready(void)
-{
-	return omap_pm_is_ready_status;
-}
+extern void omap_pm_setup_oscillator(u32 tstart, u32 tshut);
+extern void omap_pm_get_oscillator(u32 *tstart, u32 *tshut);
+extern void omap_pm_setup_sr_i2c_pcb_length(u32 mm);
+void amx3_common_pm_init(void);
 #else
-static inline bool omap_pm_is_ready(void)
-{
-	return false;
-}
+static inline void omap_pm_setup_oscillator(u32 tstart, u32 tshut) { }
+static inline void omap_pm_get_oscillator(u32 *tstart, u32 *tshut) { *tstart = *tshut = 0; }
+static inline void omap_pm_setup_sr_i2c_pcb_length(u32 mm) { }
+static inline void amx3_common_pm_init(void) { }
 #endif
+
+#ifdef CONFIG_SUSPEND
+void omap_common_suspend_init(void *pm_suspend);
+#else
+static inline void omap_common_suspend_init(void *pm_suspend)
+{
+}
+#endif /* CONFIG_SUSPEND */
 #endif

@@ -29,6 +29,7 @@
 #include <sound/core.h>
 #include <sound/emu10k1.h>
 #include <linux/delay.h>
+#include <linux/export.h>
 #include "p17v.h"
 
 unsigned int snd_emu10k1_ptr_read(struct snd_emu10k1 * emu, unsigned int reg, unsigned int chn)
@@ -70,11 +71,8 @@ void snd_emu10k1_ptr_write(struct snd_emu10k1 *emu, unsigned int reg, unsigned i
 	unsigned long flags;
 	unsigned int mask;
 
-	if (!emu) {
-		snd_printk(KERN_ERR "ptr_write: emu is null!\n");
-		dump_stack();
+	if (snd_BUG_ON(!emu))
 		return;
-	}
 	mask = emu->audigy ? A_PTR_ADDRESS_MASK : PTR_ADDRESS_MASK;
 	regptr = ((reg << 16) & mask) | (chn & PTR_CHANNELNUM_MASK);
 
@@ -198,7 +196,7 @@ int snd_emu10k1_i2c_write(struct snd_emu10k1 *emu,
 	int err = 0;
 
 	if ((reg > 0x7f) || (value > 0x1ff)) {
-		snd_printk(KERN_ERR "i2c_write: invalid values.\n");
+		dev_err(emu->card->dev, "i2c_write: invalid values.\n");
 		return -EINVAL;
 	}
 
@@ -226,7 +224,7 @@ int snd_emu10k1_i2c_write(struct snd_emu10k1 *emu,
 				break;
 
 			if (timeout > 1000) {
-                		snd_printk(KERN_WARNING
+				dev_warn(emu->card->dev,
 					   "emu10k1:I2C:timeout status=0x%x\n",
 					   status);
 				break;
@@ -238,8 +236,8 @@ int snd_emu10k1_i2c_write(struct snd_emu10k1 *emu,
 	}
 
 	if (retry == 10) {
-		snd_printk(KERN_ERR "Writing to ADC failed!\n");
-		snd_printk(KERN_ERR "status=0x%x, reg=%d, value=%d\n",
+		dev_err(emu->card->dev, "Writing to ADC failed!\n");
+		dev_err(emu->card->dev, "status=0x%x, reg=%d, value=%d\n",
 			status, reg, value);
 		/* dump_stack(); */
 		err = -EINVAL;

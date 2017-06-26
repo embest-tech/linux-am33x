@@ -57,8 +57,8 @@
  *	Note that *all* calls to CMOS_READ and CMOS_WRITE are done with
  *	interrupts disabled. Due to the index-port/data-port (0x70/0x71)
  *	design of the RTC, we don't want two different things trying to
- *	get to it at once. (e.g. the periodic 11 min sync from time.c vs.
- *	this driver.)
+ *	get to it at once. (e.g. the periodic 11 min sync from
+ *      kernel/time/ntp.c vs. this driver.)
  */
 
 #include <linux/interrupt.h>
@@ -80,9 +80,9 @@
 #include <linux/bcd.h>
 #include <linux/delay.h>
 #include <linux/uaccess.h>
+#include <linux/ratelimit.h>
 
 #include <asm/current.h>
-#include <asm/system.h>
 
 #ifdef CONFIG_X86
 #include <asm/hpet.h>
@@ -227,7 +227,7 @@ static inline unsigned char rtc_is_updating(void)
 
 #ifdef RTC_IRQ
 /*
- *	A very tiny interrupt handler. It runs with IRQF_DISABLED set,
+ *	A very tiny interrupt handler. It runs with interrupts disabled,
  *	but there is possibility of conflicting with the set_rtc_mmss()
  *	call (the rtc irq and the timer irq can easily run at the same
  *	time in two different CPUs). So we need to serialize
@@ -280,7 +280,7 @@ static irqreturn_t rtc_interrupt(int irq, void *dev_id)
 /*
  * sysctl-tuning infrastructure.
  */
-static ctl_table rtc_table[] = {
+static struct ctl_table rtc_table[] = {
 	{
 		.procname	= "max-user-freq",
 		.data		= &rtc_max_user_freq,
@@ -291,7 +291,7 @@ static ctl_table rtc_table[] = {
 	{ }
 };
 
-static ctl_table rtc_root[] = {
+static struct ctl_table rtc_root[] = {
 	{
 		.procname	= "rtc",
 		.mode		= 0555,
@@ -300,7 +300,7 @@ static ctl_table rtc_root[] = {
 	{ }
 };
 
-static ctl_table dev_root[] = {
+static struct ctl_table dev_root[] = {
 	{
 		.procname	= "dev",
 		.mode		= 0555,
@@ -411,7 +411,7 @@ static int rtc_do_ioctl(unsigned int cmd, unsigned long arg, int kernel)
 		case RTC_IRQP_READ:
 		case RTC_IRQP_SET:
 			return -EINVAL;
-		};
+		}
 	}
 #endif
 
@@ -1040,8 +1040,7 @@ no_irq:
 		rtc_int_handler_ptr = rtc_interrupt;
 	}
 
-	if (request_irq(RTC_IRQ, rtc_int_handler_ptr, IRQF_DISABLED,
-			"rtc", NULL)) {
+	if (request_irq(RTC_IRQ, rtc_int_handler_ptr, 0, "rtc", NULL)) {
 		/* Yeah right, seeing as irq 8 doesn't even hit the bus. */
 		rtc_has_irq = 0;
 		printk(KERN_ERR "rtc: IRQ %d is not free.\n", RTC_IRQ);
@@ -1195,10 +1194,8 @@ static void rtc_dropped_irq(unsigned long data)
 
 	spin_unlock_irq(&rtc_lock);
 
-	if (printk_ratelimit()) {
-		printk(KERN_WARNING "rtc: lost some interrupts at %ldHz.\n",
-			freq);
-	}
+	printk_ratelimited(KERN_WARNING "rtc: lost some interrupts at %ldHz.\n",
+			   freq);
 
 	/* Now we have new data */
 	wake_up_interruptible(&rtc_wait);

@@ -76,10 +76,6 @@ static LIST_HEAD(spu_full_list);
 static DEFINE_SPINLOCK(spu_full_list_lock);
 static DEFINE_MUTEX(spu_full_list_mutex);
 
-struct spu_slb {
-	u64 esid, vsid;
-};
-
 void spu_invalidate_slbs(struct spu *spu)
 {
 	struct spu_priv2 __iomem *priv2 = spu->priv2;
@@ -149,7 +145,7 @@ static void spu_restart_dma(struct spu *spu)
 	}
 }
 
-static inline void spu_load_slb(struct spu *spu, int slbe, struct spu_slb *slb)
+static inline void spu_load_slb(struct spu *spu, int slbe, struct copro_slb *slb)
 {
 	struct spu_priv2 __iomem *priv2 = spu->priv2;
 
@@ -167,45 +163,12 @@ static inline void spu_load_slb(struct spu *spu, int slbe, struct spu_slb *slb)
 
 static int __spu_trap_data_seg(struct spu *spu, unsigned long ea)
 {
-	struct mm_struct *mm = spu->mm;
-	struct spu_slb slb;
-	int psize;
+	struct copro_slb slb;
+	int ret;
 
-	pr_debug("%s\n", __func__);
-
-	slb.esid = (ea & ESID_MASK) | SLB_ESID_V;
-
-	switch(REGION_ID(ea)) {
-	case USER_REGION_ID:
-#ifdef CONFIG_PPC_MM_SLICES
-		psize = get_slice_psize(mm, ea);
-#else
-		psize = mm->context.user_psize;
-#endif
-		slb.vsid = (get_vsid(mm->context.id, ea, MMU_SEGSIZE_256M)
-				<< SLB_VSID_SHIFT) | SLB_VSID_USER;
-		break;
-	case VMALLOC_REGION_ID:
-		if (ea < VMALLOC_END)
-			psize = mmu_vmalloc_psize;
-		else
-			psize = mmu_io_psize;
-		slb.vsid = (get_kernel_vsid(ea, MMU_SEGSIZE_256M)
-				<< SLB_VSID_SHIFT) | SLB_VSID_KERNEL;
-		break;
-	case KERNEL_REGION_ID:
-		psize = mmu_linear_psize;
-		slb.vsid = (get_kernel_vsid(ea, MMU_SEGSIZE_256M)
-				<< SLB_VSID_SHIFT) | SLB_VSID_KERNEL;
-		break;
-	default:
-		/* Future: support kernel segments so that drivers
-		 * can use SPUs.
-		 */
-		pr_debug("invalid region access at %016lx\n", ea);
-		return 1;
-	}
-	slb.vsid |= mmu_psize_defs[psize].sllp;
+	ret = copro_calculate_slb(spu->mm, ea, &slb);
+	if (ret)
+		return ret;
 
 	spu_load_slb(spu, spu->slb_replace, &slb);
 
@@ -218,7 +181,8 @@ static int __spu_trap_data_seg(struct spu *spu, unsigned long ea)
 	return 0;
 }
 
-extern int hash_page(unsigned long ea, unsigned long access, unsigned long trap); //XXX
+extern int hash_page(unsigned long ea, unsigned long access,
+		     unsigned long trap, unsigned long dsisr); //XXX
 static int __spu_trap_data_map(struct spu *spu, unsigned long ea, u64 dsisr)
 {
 	int ret;
@@ -233,7 +197,7 @@ static int __spu_trap_data_map(struct spu *spu, unsigned long ea, u64 dsisr)
 	    (REGION_ID(ea) != USER_REGION_ID)) {
 
 		spin_unlock(&spu->register_lock);
-		ret = hash_page(ea, _PAGE_PRESENT, 0x300);
+		ret = hash_page(ea, _PAGE_PRESENT, 0x300, dsisr);
 		spin_lock(&spu->register_lock);
 
 		if (!ret) {
@@ -253,7 +217,7 @@ static int __spu_trap_data_map(struct spu *spu, unsigned long ea, u64 dsisr)
 	return 0;
 }
 
-static void __spu_kernel_slb(void *addr, struct spu_slb *slb)
+static void __spu_kernel_slb(void *addr, struct copro_slb *slb)
 {
 	unsigned long ea = (unsigned long)addr;
 	u64 llp;
@@ -272,7 +236,7 @@ static void __spu_kernel_slb(void *addr, struct spu_slb *slb)
  * Given an array of @nr_slbs SLB entries, @slbs, return non-zero if the
  * address @new_addr is present.
  */
-static inline int __slb_present(struct spu_slb *slbs, int nr_slbs,
+static inline int __slb_present(struct copro_slb *slbs, int nr_slbs,
 		void *new_addr)
 {
 	unsigned long ea = (unsigned long)new_addr;
@@ -297,7 +261,7 @@ static inline int __slb_present(struct spu_slb *slbs, int nr_slbs,
 void spu_setup_kernel_slbs(struct spu *spu, struct spu_lscsa *lscsa,
 		void *code, int code_size)
 {
-	struct spu_slb slbs[4];
+	struct copro_slb slbs[4];
 	int i, nr_slbs = 0;
 	/* start and end addresses of both mappings */
 	void *addrs[] = {
@@ -442,8 +406,7 @@ static int spu_request_irqs(struct spu *spu)
 		snprintf(spu->irq_c0, sizeof (spu->irq_c0), "spe%02d.0",
 			 spu->number);
 		ret = request_irq(spu->irqs[0], spu_irq_class_0,
-				  IRQF_DISABLED,
-				  spu->irq_c0, spu);
+				  0, spu->irq_c0, spu);
 		if (ret)
 			goto bail0;
 	}
@@ -451,8 +414,7 @@ static int spu_request_irqs(struct spu *spu)
 		snprintf(spu->irq_c1, sizeof (spu->irq_c1), "spe%02d.1",
 			 spu->number);
 		ret = request_irq(spu->irqs[1], spu_irq_class_1,
-				  IRQF_DISABLED,
-				  spu->irq_c1, spu);
+				  0, spu->irq_c1, spu);
 		if (ret)
 			goto bail1;
 	}
@@ -460,8 +422,7 @@ static int spu_request_irqs(struct spu *spu)
 		snprintf(spu->irq_c2, sizeof (spu->irq_c2), "spe%02d.2",
 			 spu->number);
 		ret = request_irq(spu->irqs[2], spu_irq_class_2,
-				  IRQF_DISABLED,
-				  spu->irq_c2, spu);
+				  0, spu->irq_c2, spu);
 		if (ret)
 			goto bail2;
 	}
@@ -522,31 +483,32 @@ void spu_init_channels(struct spu *spu)
 }
 EXPORT_SYMBOL_GPL(spu_init_channels);
 
-static struct sysdev_class spu_sysdev_class = {
+static struct bus_type spu_subsys = {
 	.name = "spu",
+	.dev_name = "spu",
 };
 
-int spu_add_sysdev_attr(struct sysdev_attribute *attr)
+int spu_add_dev_attr(struct device_attribute *attr)
 {
 	struct spu *spu;
 
 	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
-		sysdev_create_file(&spu->sysdev, attr);
+		device_create_file(&spu->dev, attr);
 	mutex_unlock(&spu_full_list_mutex);
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(spu_add_sysdev_attr);
+EXPORT_SYMBOL_GPL(spu_add_dev_attr);
 
-int spu_add_sysdev_attr_group(struct attribute_group *attrs)
+int spu_add_dev_attr_group(struct attribute_group *attrs)
 {
 	struct spu *spu;
 	int rc = 0;
 
 	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list) {
-		rc = sysfs_create_group(&spu->sysdev.kobj, attrs);
+		rc = sysfs_create_group(&spu->dev.kobj, attrs);
 
 		/* we're in trouble here, but try unwinding anyway */
 		if (rc) {
@@ -555,7 +517,7 @@ int spu_add_sysdev_attr_group(struct attribute_group *attrs)
 
 			list_for_each_entry_continue_reverse(spu,
 					&spu_full_list, full_list)
-				sysfs_remove_group(&spu->sysdev.kobj, attrs);
+				sysfs_remove_group(&spu->dev.kobj, attrs);
 			break;
 		}
 	}
@@ -564,45 +526,45 @@ int spu_add_sysdev_attr_group(struct attribute_group *attrs)
 
 	return rc;
 }
-EXPORT_SYMBOL_GPL(spu_add_sysdev_attr_group);
+EXPORT_SYMBOL_GPL(spu_add_dev_attr_group);
 
 
-void spu_remove_sysdev_attr(struct sysdev_attribute *attr)
+void spu_remove_dev_attr(struct device_attribute *attr)
 {
 	struct spu *spu;
 
 	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
-		sysdev_remove_file(&spu->sysdev, attr);
+		device_remove_file(&spu->dev, attr);
 	mutex_unlock(&spu_full_list_mutex);
 }
-EXPORT_SYMBOL_GPL(spu_remove_sysdev_attr);
+EXPORT_SYMBOL_GPL(spu_remove_dev_attr);
 
-void spu_remove_sysdev_attr_group(struct attribute_group *attrs)
+void spu_remove_dev_attr_group(struct attribute_group *attrs)
 {
 	struct spu *spu;
 
 	mutex_lock(&spu_full_list_mutex);
 	list_for_each_entry(spu, &spu_full_list, full_list)
-		sysfs_remove_group(&spu->sysdev.kobj, attrs);
+		sysfs_remove_group(&spu->dev.kobj, attrs);
 	mutex_unlock(&spu_full_list_mutex);
 }
-EXPORT_SYMBOL_GPL(spu_remove_sysdev_attr_group);
+EXPORT_SYMBOL_GPL(spu_remove_dev_attr_group);
 
-static int spu_create_sysdev(struct spu *spu)
+static int spu_create_dev(struct spu *spu)
 {
 	int ret;
 
-	spu->sysdev.id = spu->number;
-	spu->sysdev.cls = &spu_sysdev_class;
-	ret = sysdev_register(&spu->sysdev);
+	spu->dev.id = spu->number;
+	spu->dev.bus = &spu_subsys;
+	ret = device_register(&spu->dev);
 	if (ret) {
 		printk(KERN_ERR "Can't register SPU %d with sysfs\n",
 				spu->number);
 		return ret;
 	}
 
-	sysfs_add_device_to_node(&spu->sysdev, spu->node);
+	sysfs_add_device_to_node(&spu->dev, spu->node);
 
 	return 0;
 }
@@ -613,7 +575,6 @@ static int __init create_spu(void *data)
 	int ret;
 	static int number;
 	unsigned long flags;
-	struct timespec ts;
 
 	ret = -ENOMEM;
 	spu = kzalloc(sizeof (*spu), GFP_KERNEL);
@@ -638,7 +599,7 @@ static int __init create_spu(void *data)
 	if (ret)
 		goto out_destroy;
 
-	ret = spu_create_sysdev(spu);
+	ret = spu_create_dev(spu);
 	if (ret)
 		goto out_free_irqs;
 
@@ -654,8 +615,7 @@ static int __init create_spu(void *data)
 	mutex_unlock(&spu_full_list_mutex);
 
 	spu->stats.util_state = SPU_UTIL_IDLE_LOADED;
-	ktime_get_ts(&ts);
-	spu->stats.tstamp = timespec_to_ns(&ts);
+	spu->stats.tstamp = ktime_get_ns();
 
 	INIT_LIST_HEAD(&spu->aff_list);
 
@@ -678,7 +638,6 @@ static const char *spu_state_names[] = {
 static unsigned long long spu_acct_time(struct spu *spu,
 		enum spu_utilization_state state)
 {
-	struct timespec ts;
 	unsigned long long time = spu->stats.times[state];
 
 	/*
@@ -686,19 +645,17 @@ static unsigned long long spu_acct_time(struct spu *spu,
 	 * statistics are not updated.  Apply the time delta from the
 	 * last recorded state of the spu.
 	 */
-	if (spu->stats.util_state == state) {
-		ktime_get_ts(&ts);
-		time += timespec_to_ns(&ts) - spu->stats.tstamp;
-	}
+	if (spu->stats.util_state == state)
+		time += ktime_get_ns() - spu->stats.tstamp;
 
 	return time / NSEC_PER_MSEC;
 }
 
 
-static ssize_t spu_stat_show(struct sys_device *sysdev,
-				struct sysdev_attribute *attr, char *buf)
+static ssize_t spu_stat_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
 {
-	struct spu *spu = container_of(sysdev, struct spu, sysdev);
+	struct spu *spu = container_of(dev, struct spu, dev);
 
 	return sprintf(buf, "%s %llu %llu %llu %llu "
 		      "%llu %llu %llu %llu %llu %llu %llu %llu\n",
@@ -717,7 +674,7 @@ static ssize_t spu_stat_show(struct sys_device *sysdev,
 		spu->stats.libassist);
 }
 
-static SYSDEV_ATTR(stat, 0644, spu_stat_show, NULL);
+static DEVICE_ATTR(stat, 0444, spu_stat_show, NULL);
 
 #ifdef CONFIG_KEXEC
 
@@ -816,8 +773,8 @@ static int __init init_spu_base(void)
 	if (!spu_management_ops)
 		goto out;
 
-	/* create sysdev class for spus */
-	ret = sysdev_class_register(&spu_sysdev_class);
+	/* create system subsystem for spus */
+	ret = subsys_system_register(&spu_subsys, NULL);
 	if (ret)
 		goto out;
 
@@ -826,7 +783,7 @@ static int __init init_spu_base(void)
 	if (ret < 0) {
 		printk(KERN_WARNING "%s: Error initializing spus\n",
 			__func__);
-		goto out_unregister_sysdev_class;
+		goto out_unregister_subsys;
 	}
 
 	if (ret > 0)
@@ -836,15 +793,15 @@ static int __init init_spu_base(void)
 	xmon_register_spus(&spu_full_list);
 	crash_register_spus(&spu_full_list);
 	mutex_unlock(&spu_full_list_mutex);
-	spu_add_sysdev_attr(&attr_stat);
+	spu_add_dev_attr(&dev_attr_stat);
 	register_syscore_ops(&spu_syscore_ops);
 
 	spu_init_affinity();
 
 	return 0;
 
- out_unregister_sysdev_class:
-	sysdev_class_unregister(&spu_sysdev_class);
+ out_unregister_subsys:
+	bus_unregister(&spu_subsys);
  out:
 	return ret;
 }

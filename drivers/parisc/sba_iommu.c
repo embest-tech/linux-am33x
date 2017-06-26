@@ -39,10 +39,12 @@
 
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/module.h>
 
 #include <asm/ropes.h>
 #include <asm/mckinley.h>	/* for proc_mckinley_root */
 #include <asm/runway.h>		/* for proc_runway_root */
+#include <asm/page.h>		/* for PAGE0 */
 #include <asm/pdc.h>		/* for PDC_MODEL_* */
 #include <asm/pdcpat.h>		/* for is_pdc_pat() */
 #include <asm/parisc-device.h>
@@ -276,7 +278,7 @@ sba_dump_sg( struct ioc *ioc, struct scatterlist *startsg, int nents)
 				nents,
 				(unsigned long) sg_dma_address(startsg),
 				sg_dma_len(startsg),
-				sg_virt_addr(startsg), startsg->length);
+				sg_virt(startsg), startsg->length);
 		startsg++;
 	}
 }
@@ -573,7 +575,7 @@ sba_io_pdir_entry(u64 *pdir_ptr, space_t sid, unsigned long vba,
 
 	mtsp(sid,1);
 	asm("lci 0(%%sr1, %1), %0" : "=r" (ci) : "r" (vba));
-	pa |= (ci >> 12) & 0xff;  /* move CI (8 bits) into lowest byte */
+	pa |= (ci >> PAGE_SHIFT) & 0xff;  /* move CI (8 bits) into lowest byte */
 
 	pa |= SBA_PDIR_VALID_BIT;	/* set "valid" bit */
 	*pdir_ptr = cpu_to_le64(pa);	/* swap and store into I/O Pdir */
@@ -668,7 +670,7 @@ sba_mark_invalid(struct ioc *ioc, dma_addr_t iova, size_t byte_cnt)
  * @dev: instance of PCI owned by the driver that's asking
  * @mask:  number of address bits this PCI device can handle
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static int sba_dma_supported( struct device *dev, u64 mask)
 {
@@ -680,7 +682,7 @@ static int sba_dma_supported( struct device *dev, u64 mask)
 		return(0);
 	}
 
-	/* Documentation/PCI/PCI-DMA-mapping.txt tells drivers to try 64-bit
+	/* Documentation/DMA-API-HOWTO.txt tells drivers to try 64-bit
 	 * first, then fall back to 32-bit if that fails.
 	 * We are just "encouraging" 32-bit DMA masks here since we can
 	 * never allow IOMMU bypass unless we add special support for ZX1.
@@ -706,7 +708,7 @@ static int sba_dma_supported( struct device *dev, u64 mask)
  * @size:  number of bytes to map in driver buffer.
  * @direction:  R/W or both.
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static dma_addr_t
 sba_map_single(struct device *dev, void *addr, size_t size,
@@ -785,7 +787,7 @@ sba_map_single(struct device *dev, void *addr, size_t size,
  * @size:  number of bytes mapped in driver buffer.
  * @direction:  R/W or both.
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static void
 sba_unmap_single(struct device *dev, dma_addr_t iova, size_t size,
@@ -861,7 +863,7 @@ sba_unmap_single(struct device *dev, dma_addr_t iova, size_t size,
  * @size:  number of bytes mapped in driver buffer.
  * @dma_handle:  IOVA of new buffer.
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static void *sba_alloc_consistent(struct device *hwdev, size_t size,
 					dma_addr_t *dma_handle, gfp_t gfp)
@@ -892,7 +894,7 @@ static void *sba_alloc_consistent(struct device *hwdev, size_t size,
  * @vaddr:  virtual address IOVA of "consistent" buffer.
  * @dma_handler:  IO virtual address of "consistent" buffer.
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static void
 sba_free_consistent(struct device *hwdev, size_t size, void *vaddr,
@@ -927,7 +929,7 @@ int dump_run_sg = 0;
  * @nents:  number of entries in list
  * @direction:  R/W or both.
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static int
 sba_map_sg(struct device *dev, struct scatterlist *sglist, int nents,
@@ -943,8 +945,7 @@ sba_map_sg(struct device *dev, struct scatterlist *sglist, int nents,
 
 	/* Fast path single entry scatterlists. */
 	if (nents == 1) {
-		sg_dma_address(sglist) = sba_map_single(dev,
-						(void *)sg_virt_addr(sglist),
+		sg_dma_address(sglist) = sba_map_single(dev, sg_virt(sglist),
 						sglist->length, direction);
 		sg_dma_len(sglist)     = sglist->length;
 		return 1;
@@ -1011,7 +1012,7 @@ sba_map_sg(struct device *dev, struct scatterlist *sglist, int nents,
  * @nents:  number of entries in list
  * @direction:  R/W or both.
  *
- * See Documentation/PCI/PCI-DMA-mapping.txt
+ * See Documentation/DMA-API-HOWTO.txt
  */
 static void 
 sba_unmap_sg(struct device *dev, struct scatterlist *sglist, int nents,
@@ -1023,7 +1024,7 @@ sba_unmap_sg(struct device *dev, struct scatterlist *sglist, int nents,
 #endif
 
 	DBG_RUN_SG("%s() START %d entries,  %p,%x\n",
-		__func__, nents, sg_virt_addr(sglist), sglist->length);
+		__func__, nents, sg_virt(sglist), sglist->length);
 
 	ioc = GET_IOC(dev);
 
@@ -1374,7 +1375,7 @@ static void
 sba_ioc_init(struct parisc_device *sba, struct ioc *ioc, int ioc_num)
 {
 	u32 iova_space_size, iova_space_mask;
-	unsigned int pdir_size, iov_order;
+	unsigned int pdir_size, iov_order, tcnfg;
 
 	/*
 	** Determine IOVA Space size from memory size.
@@ -1466,8 +1467,19 @@ sba_ioc_init(struct parisc_device *sba, struct ioc *ioc, int ioc_num)
 	WRITE_REG(ioc->ibase | 1, ioc->ioc_hpa+IOC_IBASE);
 	WRITE_REG(ioc->imask, ioc->ioc_hpa+IOC_IMASK);
 
-	/* Set I/O PDIR Page size to 4K */
-	WRITE_REG(0, ioc->ioc_hpa+IOC_TCNFG);
+	/* Set I/O PDIR Page size to system page size */
+	switch (PAGE_SHIFT) {
+		case 12: tcnfg = 0; break;	/*  4K */
+		case 13: tcnfg = 1; break;	/*  8K */
+		case 14: tcnfg = 2; break;	/* 16K */
+		case 16: tcnfg = 3; break;	/* 64K */
+		default:
+			panic(__FILE__ "Unsupported system page size %d",
+				1 << PAGE_SHIFT);
+			break;
+	}
+	/* Set I/O PDIR Page size to PAGE_SIZE (4k/16k/...) */
+	WRITE_REG(tcnfg, ioc->ioc_hpa+IOC_TCNFG);
 
 	/*
 	** Clear I/O TLB of any possible entries.
@@ -1761,37 +1773,35 @@ static int sba_proc_info(struct seq_file *m, void *p)
 #ifdef SBA_COLLECT_STATS
 	unsigned long avg = 0, min, max;
 #endif
-	int i, len = 0;
+	int i;
 
-	len += seq_printf(m, "%s rev %d.%d\n",
-		sba_dev->name,
-		(sba_dev->hw_rev & 0x7) + 1,
-		(sba_dev->hw_rev & 0x18) >> 3
-		);
-	len += seq_printf(m, "IO PDIR size    : %d bytes (%d entries)\n",
-		(int) ((ioc->res_size << 3) * sizeof(u64)), /* 8 bits/byte */
-		total_pages);
+	seq_printf(m, "%s rev %d.%d\n",
+		   sba_dev->name,
+		   (sba_dev->hw_rev & 0x7) + 1,
+		   (sba_dev->hw_rev & 0x18) >> 3);
+	seq_printf(m, "IO PDIR size    : %d bytes (%d entries)\n",
+		   (int)((ioc->res_size << 3) * sizeof(u64)), /* 8 bits/byte */
+		   total_pages);
 
-	len += seq_printf(m, "Resource bitmap : %d bytes (%d pages)\n", 
-		ioc->res_size, ioc->res_size << 3);   /* 8 bits per byte */
+	seq_printf(m, "Resource bitmap : %d bytes (%d pages)\n",
+		   ioc->res_size, ioc->res_size << 3);   /* 8 bits per byte */
 
-	len += seq_printf(m, "LMMIO_BASE/MASK/ROUTE %08x %08x %08x\n",
-		READ_REG32(sba_dev->sba_hpa + LMMIO_DIST_BASE),
-		READ_REG32(sba_dev->sba_hpa + LMMIO_DIST_MASK),
-		READ_REG32(sba_dev->sba_hpa + LMMIO_DIST_ROUTE)
-		);
+	seq_printf(m, "LMMIO_BASE/MASK/ROUTE %08x %08x %08x\n",
+		   READ_REG32(sba_dev->sba_hpa + LMMIO_DIST_BASE),
+		   READ_REG32(sba_dev->sba_hpa + LMMIO_DIST_MASK),
+		   READ_REG32(sba_dev->sba_hpa + LMMIO_DIST_ROUTE));
 
 	for (i=0; i<4; i++)
-		len += seq_printf(m, "DIR%d_BASE/MASK/ROUTE %08x %08x %08x\n", i,
-			READ_REG32(sba_dev->sba_hpa + LMMIO_DIRECT0_BASE  + i*0x18),
-			READ_REG32(sba_dev->sba_hpa + LMMIO_DIRECT0_MASK  + i*0x18),
-			READ_REG32(sba_dev->sba_hpa + LMMIO_DIRECT0_ROUTE + i*0x18)
-		);
+		seq_printf(m, "DIR%d_BASE/MASK/ROUTE %08x %08x %08x\n",
+			   i,
+			   READ_REG32(sba_dev->sba_hpa + LMMIO_DIRECT0_BASE  + i*0x18),
+			   READ_REG32(sba_dev->sba_hpa + LMMIO_DIRECT0_MASK  + i*0x18),
+			   READ_REG32(sba_dev->sba_hpa + LMMIO_DIRECT0_ROUTE + i*0x18));
 
 #ifdef SBA_COLLECT_STATS
-	len += seq_printf(m, "IO PDIR entries : %ld free  %ld used (%d%%)\n",
-		total_pages - ioc->used_pages, ioc->used_pages,
-		(int) (ioc->used_pages * 100 / total_pages));
+	seq_printf(m, "IO PDIR entries : %ld free  %ld used (%d%%)\n",
+		   total_pages - ioc->used_pages, ioc->used_pages,
+		   (int)(ioc->used_pages * 100 / total_pages));
 
 	min = max = ioc->avg_search[0];
 	for (i = 0; i < SBA_SEARCH_SAMPLE; i++) {
@@ -1800,26 +1810,26 @@ static int sba_proc_info(struct seq_file *m, void *p)
 		if (ioc->avg_search[i] < min) min = ioc->avg_search[i];
 	}
 	avg /= SBA_SEARCH_SAMPLE;
-	len += seq_printf(m, "  Bitmap search : %ld/%ld/%ld (min/avg/max CPU Cycles)\n",
-		min, avg, max);
+	seq_printf(m, "  Bitmap search : %ld/%ld/%ld (min/avg/max CPU Cycles)\n",
+		   min, avg, max);
 
-	len += seq_printf(m, "pci_map_single(): %12ld calls  %12ld pages (avg %d/1000)\n",
-		ioc->msingle_calls, ioc->msingle_pages,
-		(int) ((ioc->msingle_pages * 1000)/ioc->msingle_calls));
+	seq_printf(m, "pci_map_single(): %12ld calls  %12ld pages (avg %d/1000)\n",
+		   ioc->msingle_calls, ioc->msingle_pages,
+		   (int)((ioc->msingle_pages * 1000)/ioc->msingle_calls));
 
 	/* KLUGE - unmap_sg calls unmap_single for each mapped page */
 	min = ioc->usingle_calls;
 	max = ioc->usingle_pages - ioc->usg_pages;
-	len += seq_printf(m, "pci_unmap_single: %12ld calls  %12ld pages (avg %d/1000)\n",
-		min, max, (int) ((max * 1000)/min));
+	seq_printf(m, "pci_unmap_single: %12ld calls  %12ld pages (avg %d/1000)\n",
+		   min, max, (int)((max * 1000)/min));
 
-	len += seq_printf(m, "pci_map_sg()    : %12ld calls  %12ld pages (avg %d/1000)\n",
-		ioc->msg_calls, ioc->msg_pages, 
-		(int) ((ioc->msg_pages * 1000)/ioc->msg_calls));
+	seq_printf(m, "pci_map_sg()    : %12ld calls  %12ld pages (avg %d/1000)\n",
+		   ioc->msg_calls, ioc->msg_pages,
+		   (int)((ioc->msg_pages * 1000)/ioc->msg_calls));
 
-	len += seq_printf(m, "pci_unmap_sg()  : %12ld calls  %12ld pages (avg %d/1000)\n",
-		ioc->usg_calls, ioc->usg_pages,
-		(int) ((ioc->usg_pages * 1000)/ioc->usg_calls));
+	seq_printf(m, "pci_unmap_sg()  : %12ld calls  %12ld pages (avg %d/1000)\n",
+		   ioc->usg_calls, ioc->usg_pages,
+		   (int)((ioc->usg_pages * 1000)/ioc->usg_calls));
 #endif
 
 	return 0;
@@ -1845,14 +1855,14 @@ sba_proc_bitmap_info(struct seq_file *m, void *p)
 	struct sba_device *sba_dev = sba_list;
 	struct ioc *ioc = &sba_dev->ioc[0];	/* FIXME: Multi-IOC support! */
 	unsigned int *res_ptr = (unsigned int *)ioc->res_map;
-	int i, len = 0;
+	int i;
 
 	for (i = 0; i < (ioc->res_size/sizeof(unsigned int)); ++i, ++res_ptr) {
 		if ((i & 7) == 0)
-			len += seq_printf(m, "\n   ");
-		len += seq_printf(m, " %08x", *res_ptr);
+			seq_puts(m, "\n   ");
+		seq_printf(m, " %08x", *res_ptr);
 	}
-	len += seq_printf(m, "\n");
+	seq_putc(m, '\n');
 
 	return 0;
 }

@@ -22,6 +22,7 @@
  *
  */
 
+#include <linux/export.h>
 #include "emux_voice.h"
 #include <sound/asoundef.h>
 
@@ -185,8 +186,7 @@ snd_emux_note_off(void *p, int note, int vel, struct snd_midi_channel *chan)
 				 */
 				vp->state = SNDRV_EMUX_ST_PENDING;
 				if (! emu->timer_active) {
-					emu->tlist.expires = jiffies + 1;
-					add_timer(&emu->tlist);
+					mod_timer(&emu->tlist, jiffies + 1);
 					emu->timer_active = 1;
 				}
 			} else
@@ -222,8 +222,7 @@ void snd_emux_timer_callback(unsigned long data)
 		}
 	}
 	if (do_again) {
-		emu->tlist.expires = jiffies + 1;
-		add_timer(&emu->tlist);
+		mod_timer(&emu->tlist, jiffies + 1);
 		emu->timer_active = 1;
 	} else
 		emu->timer_active = 0;

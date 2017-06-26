@@ -22,6 +22,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/mmzone.h>
+#include <linux/export.h>
 #include <linux/io.h>
 #include <linux/mm.h>
 
@@ -142,7 +143,7 @@ static void _dump_areas(unsigned int spe_id, unsigned long priv2,
 	pr_debug("%s:%d: shadow:  %lxh\n", func, line, shadow);
 }
 
-inline u64 ps3_get_spe_id(void *arg)
+u64 ps3_get_spe_id(void *arg)
 {
 	return spu_pdata(arg)->spe_id;
 }
@@ -153,7 +154,7 @@ static unsigned long get_vas_id(void)
 	u64 id;
 
 	lv1_get_logical_ppe_id(&id);
-	lv1_get_virtual_address_space_id_of_ppe(id, &id);
+	lv1_get_virtual_address_space_id_of_ppe(&id);
 
 	return id;
 }

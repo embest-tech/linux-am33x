@@ -1,7 +1,13 @@
-__ZRELADDR	:= $(shell /bin/bash -c 'printf "0x%08x" \
-		     $$[$(CONFIG_MEMORY_START) + 0x8000]')
+# per-board load address for uImage
+loadaddr-y	:=
+loadaddr-$(CONFIG_MACH_ARMADILLO800EVA) += 0x40008000
+loadaddr-$(CONFIG_MACH_BOCKW) += 0x60008000
+loadaddr-$(CONFIG_MACH_BOCKW_REFERENCE) += 0x60008000
+loadaddr-$(CONFIG_MACH_KZM9G) += 0x41008000
+loadaddr-$(CONFIG_MACH_MARZEN) += 0x60008000
 
-   zreladdr-y   := $(__ZRELADDR)
+__ZRELADDR	:= $(sort $(loadaddr-y))
+   zreladdr-y   += $(__ZRELADDR)
 
 # Unsupported legacy stuff
 #

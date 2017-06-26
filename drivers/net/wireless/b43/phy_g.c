@@ -897,7 +897,7 @@ b43_radio_interference_mitigation_enable(struct b43_wldev *dev, int mode)
 		if (b43_phy_read(dev, 0x0033) & 0x0800)
 			break;
 
-		gphy->aci_enable = 1;
+		gphy->aci_enable = true;
 
 		phy_stacksave(B43_PHY_RADIO_BITFIELD);
 		phy_stacksave(B43_PHY_G_CRS);
@@ -1038,7 +1038,7 @@ b43_radio_interference_mitigation_disable(struct b43_wldev *dev, int mode)
 		if (!(b43_phy_read(dev, 0x0033) & 0x0800))
 			break;
 
-		gphy->aci_enable = 0;
+		gphy->aci_enable = false;
 
 		phy_stackrestore(B43_PHY_RADIO_BITFIELD);
 		phy_stackrestore(B43_PHY_G_CRS);
@@ -1587,6 +1587,7 @@ static void b43_phy_initb5(struct b43_wldev *dev)
 	b43_write16(dev, 0x03E4, (b43_read16(dev, 0x03E4) & 0xFFC0) | 0x0004);
 }
 
+/* http://bcm-v4.sipsolutions.net/802.11/PHY/Init/B6 */
 static void b43_phy_initb6(struct b43_wldev *dev)
 {
 	struct b43_phy *phy = &dev->phy;
@@ -1670,7 +1671,7 @@ static void b43_phy_initb6(struct b43_wldev *dev)
 		b43_radio_write16(dev, 0x50, 0x20);
 	}
 	if (phy->radio_rev <= 2) {
-		b43_radio_write16(dev, 0x7C, 0x20);
+		b43_radio_write16(dev, 0x50, 0x20);
 		b43_radio_write16(dev, 0x5A, 0x70);
 		b43_radio_write16(dev, 0x5B, 0x7B);
 		b43_radio_write16(dev, 0x5C, 0xB0);
@@ -1686,9 +1687,8 @@ static void b43_phy_initb6(struct b43_wldev *dev)
 		b43_phy_write(dev, 0x2A, 0x8AC0);
 	b43_phy_write(dev, 0x0038, 0x0668);
 	b43_set_txpower_g(dev, &gphy->bbatt, &gphy->rfatt, gphy->tx_control);
-	if (phy->radio_rev <= 5) {
+	if (phy->radio_rev == 4 || phy->radio_rev == 5)
 		b43_phy_maskset(dev, 0x5D, 0xFF80, 0x0003);
-	}
 	if (phy->radio_rev <= 2)
 		b43_radio_write16(dev, 0x005D, 0x000D);
 
@@ -1956,10 +1956,10 @@ static void b43_phy_init_pctl(struct b43_wldev *dev)
 			bbatt.att = 11;
 			if (phy->radio_rev == 8) {
 				rfatt.att = 15;
-				rfatt.with_padmix = 1;
+				rfatt.with_padmix = true;
 			} else {
 				rfatt.att = 9;
-				rfatt.with_padmix = 0;
+				rfatt.with_padmix = false;
 			}
 			b43_set_txpower_g(dev, &bbatt, &rfatt, 0);
 		}
@@ -2137,7 +2137,7 @@ static void default_radio_attenuation(struct b43_wldev *dev,
 	struct b43_bus_dev *bdev = dev->dev;
 	struct b43_phy *phy = &dev->phy;
 
-	rf->with_padmix = 0;
+	rf->with_padmix = false;
 
 	if (dev->dev->board_vendor == SSB_BOARDVENDOR_BCM &&
 	    dev->dev->board_type == SSB_BOARD_BCM4309G) {
@@ -2221,7 +2221,7 @@ static void default_radio_attenuation(struct b43_wldev *dev,
 			return;
 		case 8:
 			rf->att = 0xA;
-			rf->with_padmix = 1;
+			rf->with_padmix = true;
 			return;
 		case 9:
 		default:
@@ -2389,7 +2389,7 @@ static int b43_gphy_init_tssi2dbm_table(struct b43_wldev *dev)
 	B43_WARN_ON((dev->dev->chip_id == 0x4301) &&
 		    (phy->radio_ver != 0x2050)); /* Not supported anymore */
 
-	gphy->dyn_tssi_tbl = 0;
+	gphy->dyn_tssi_tbl = false;
 
 	if (pab0 != 0 && pab1 != 0 && pab2 != 0 &&
 	    pab0 != -1 && pab1 != -1 && pab2 != -1) {
@@ -2404,7 +2404,7 @@ static int b43_gphy_init_tssi2dbm_table(struct b43_wldev *dev)
 							       pab1, pab2);
 		if (!gphy->tssi2dbm)
 			return -ENOMEM;
-		gphy->dyn_tssi_tbl = 1;
+		gphy->dyn_tssi_tbl = true;
 	} else {
 		/* pabX values not set in SPROM. */
 		gphy->tgt_idle_tssi = 52;
@@ -2504,7 +2504,7 @@ static void b43_gphy_op_free(struct b43_wldev *dev)
 
 	if (gphy->dyn_tssi_tbl)
 		kfree(gphy->tssi2dbm);
-	gphy->dyn_tssi_tbl = 0;
+	gphy->dyn_tssi_tbl = false;
 	gphy->tssi2dbm = NULL;
 
 	kfree(gphy);
@@ -2531,10 +2531,10 @@ static int b43_gphy_op_prepare_hardware(struct b43_wldev *dev)
 	if (phy->rev == 1) {
 		/* Workaround: Temporarly disable gmode through the early init
 		 * phase, as the gmode stuff is not needed for phy rev 1 */
-		phy->gmode = 0;
+		phy->gmode = false;
 		b43_wireless_core_reset(dev, 0);
 		b43_phy_initg(dev);
-		phy->gmode = 1;
+		phy->gmode = true;
 		b43_wireless_core_reset(dev, 1);
 	}
 
@@ -2555,13 +2555,13 @@ static void b43_gphy_op_exit(struct b43_wldev *dev)
 
 static u16 b43_gphy_op_read(struct b43_wldev *dev, u16 reg)
 {
-	b43_write16(dev, B43_MMIO_PHY_CONTROL, reg);
+	b43_write16f(dev, B43_MMIO_PHY_CONTROL, reg);
 	return b43_read16(dev, B43_MMIO_PHY_DATA);
 }
 
 static void b43_gphy_op_write(struct b43_wldev *dev, u16 reg, u16 value)
 {
-	b43_write16(dev, B43_MMIO_PHY_CONTROL, reg);
+	b43_write16f(dev, B43_MMIO_PHY_CONTROL, reg);
 	b43_write16(dev, B43_MMIO_PHY_DATA, value);
 }
 
@@ -2572,7 +2572,7 @@ static u16 b43_gphy_op_radio_read(struct b43_wldev *dev, u16 reg)
 	/* G-PHY needs 0x80 for read access. */
 	reg |= 0x80;
 
-	b43_write16(dev, B43_MMIO_RADIO_CONTROL, reg);
+	b43_write16f(dev, B43_MMIO_RADIO_CONTROL, reg);
 	return b43_read16(dev, B43_MMIO_RADIO_DATA_LOW);
 }
 
@@ -2581,7 +2581,7 @@ static void b43_gphy_op_radio_write(struct b43_wldev *dev, u16 reg, u16 value)
 	/* Register 1 is a 32-bit register. */
 	B43_WARN_ON(reg == 1);
 
-	b43_write16(dev, B43_MMIO_RADIO_CONTROL, reg);
+	b43_write16f(dev, B43_MMIO_RADIO_CONTROL, reg);
 	b43_write16(dev, B43_MMIO_RADIO_DATA_LOW, value);
 }
 
@@ -2613,7 +2613,7 @@ static void b43_gphy_op_software_rfkill(struct b43_wldev *dev,
 				      gphy->radio_off_context.rfover);
 			b43_phy_write(dev, B43_PHY_RFOVERVAL,
 				      gphy->radio_off_context.rfoverval);
-			gphy->radio_off_context.valid = 0;
+			gphy->radio_off_context.valid = false;
 		}
 		channel = phy->channel;
 		b43_gphy_channel_switch(dev, 6, 1);
@@ -2626,7 +2626,7 @@ static void b43_gphy_op_software_rfkill(struct b43_wldev *dev,
 		rfoverval = b43_phy_read(dev, B43_PHY_RFOVERVAL);
 		gphy->radio_off_context.rfover = rfover;
 		gphy->radio_off_context.rfoverval = rfoverval;
-		gphy->radio_off_context.valid = 1;
+		gphy->radio_off_context.valid = true;
 		b43_phy_write(dev, B43_PHY_RFOVER, rfover | 0x008C);
 		b43_phy_write(dev, B43_PHY_RFOVERVAL, rfoverval & 0xFF73);
 	}
@@ -2711,10 +2711,10 @@ static int b43_gphy_op_interf_mitigation(struct b43_wldev *dev,
 	if ((phy->rev == 0) || (!phy->gmode))
 		return -ENODEV;
 
-	gphy->aci_wlan_automatic = 0;
+	gphy->aci_wlan_automatic = false;
 	switch (mode) {
 	case B43_INTERFMODE_AUTOWLAN:
-		gphy->aci_wlan_automatic = 1;
+		gphy->aci_wlan_automatic = true;
 		if (gphy->aci_enable)
 			mode = B43_INTERFMODE_MANUALWLAN;
 		else
@@ -2735,8 +2735,8 @@ static int b43_gphy_op_interf_mitigation(struct b43_wldev *dev,
 		b43_radio_interference_mitigation_disable(dev, currentmode);
 
 	if (mode == B43_INTERFMODE_NONE) {
-		gphy->aci_enable = 0;
-		gphy->aci_hw_rssi = 0;
+		gphy->aci_enable = false;
+		gphy->aci_hw_rssi = false;
 	} else
 		b43_radio_interference_mitigation_enable(dev, mode);
 	gphy->interfmode = mode;

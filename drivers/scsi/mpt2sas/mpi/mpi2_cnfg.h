@@ -1,12 +1,12 @@
 /*
- *  Copyright (c) 2000-2010 LSI Corporation.
+ *  Copyright (c) 2000-2014 LSI Corporation.
  *
  *
  *           Name:  mpi2_cnfg.h
  *          Title:  MPI Configuration messages and pages
  *  Creation Date:  November 10, 2006
  *
- *    mpi2_cnfg.h Version:  02.00.17
+ *    mpi2_cnfg.h Version:  02.00.29
  *
  *  Version History
  *  ---------------
@@ -134,6 +134,43 @@
  *                      to MPI2_CONFIG_PAGE_IO_UNIT_7.
  *                      Added MPI2_CONFIG_EXTPAGETYPE_EXT_MANUFACTURING define
  *                      and MPI2_CONFIG_PAGE_EXT_MAN_PS structure.
+ *  02-23-11  02.00.18  Added ProxyVF_ID field to MPI2_CONFIG_REQUEST.
+ *                      Added IO Unit Page 8, IO Unit Page 9,
+ *                      and IO Unit Page 10.
+ *                      Added SASNotifyPrimitiveMasks field to
+ *                      MPI2_CONFIG_PAGE_IOC_7.
+ *  03-09-11  02.00.19  Fixed IO Unit Page 10 (to match the spec).
+ *  05-25-11  02.00.20  Cleaned up a few comments.
+ *  08-24-11  02.00.21  Marked the IO Unit Page 7 PowerManagementCapabilities
+ *                      for PCIe link as obsolete.
+ *                      Added SpinupFlags field containing a Disable Spin-up
+ *                      bit to the MPI2_SAS_IOUNIT4_SPINUP_GROUP fields of
+ *                      SAS IO Unit Page 4.
+ *  11-18-11  02.00.22  Added define MPI2_IOCPAGE6_CAP_FLAGS_4K_SECTORS_SUPPORT.
+ *                      Added UEFIVersion field to BIOS Page 1 and defined new
+ *                      BiosOptions bits.
+ *  11-27-12  02.00.23  Added MPI2_MANPAGE7_FLAG_EVENTREPLAY_SLOT_ORDER.
+ *			Added MPI2_BIOSPAGE1_OPTIONS_MASK_OEM_ID.
+ *  12-20-12  02.00.24  Marked MPI2_SASIOUNIT1_CONTROL_CLEAR_AFFILIATION as
+ *			obsolete for MPI v2.5 and later.
+ *			Added some defines for 12G SAS speeds.
+ *  04-09-13  02.00.25  Added MPI2_IOUNITPAGE1_ATA_SECURITY_FREEZE_LOCK.
+ *			Fixed MPI2_IOUNITPAGE5_DMA_CAP_MASK_MAX_REQUESTS to
+ *			match the specification.
+ *  12-05-13  02.00.27  Added MPI2_MANPAGE7_FLAG_BASE_ENCLOSURE_LEVEL for
+ *			MPI2_CONFIG_PAGE_MAN_7.
+ *			Added EnclosureLevel and ConnectorName fields to
+ *			MPI2_CONFIG_PAGE_SAS_DEV_0.
+ *			Added MPI2_SAS_DEVICE0_FLAGS_ENCL_LEVEL_VALID for
+ *			MPI2_CONFIG_PAGE_SAS_DEV_0.
+ *			Added EnclosureLevel field to
+ *			MPI2_CONFIG_PAGE_SAS_ENCLOSURE_0.
+ *			Added MPI2_SAS_ENCLS0_FLAGS_ENCL_LEVEL_VALID for
+ *			MPI2_CONFIG_PAGE_SAS_ENCLOSURE_0.
+ *  01-08-14  02.00.28  Added more defines for the BiosOptions field of
+ *			MPI2_CONFIG_PAGE_BIOS_1.
+ *  06-13-14  02.00.29  Added SSUTimeout field to MPI2_CONFIG_PAGE_BIOS_1, and
+ *			more defines for the BiosOptions field.
  *  --------------------------------------------------------------------------
  */
 
@@ -329,7 +366,9 @@ typedef struct _MPI2_CONFIG_REQUEST
     U8                      VP_ID;                      /* 0x08 */
     U8                      VF_ID;                      /* 0x09 */
     U16                     Reserved1;                  /* 0x0A */
-    U32                     Reserved2;                  /* 0x0C */
+	U8                      Reserved2;                  /* 0x0C */
+	U8                      ProxyVF_ID;                 /* 0x0D */
+	U16                     Reserved4;                  /* 0x0E */
     U32                     Reserved3;                  /* 0x10 */
     MPI2_CONFIG_PAGE_HEADER Header;                     /* 0x14 */
     U32                     PageAddress;                /* 0x18 */
@@ -681,6 +720,8 @@ typedef struct _MPI2_CONFIG_PAGE_MAN_7
 #define MPI2_MANUFACTURING7_PAGEVERSION                 (0x01)
 
 /* defines for the Flags field */
+#define MPI2_MANPAGE7_FLAG_BASE_ENCLOSURE_LEVEL         (0x00000008)
+#define MPI2_MANPAGE7_FLAG_EVENTREPLAY_SLOT_ORDER       (0x00000002)
 #define MPI2_MANPAGE7_FLAG_USE_SLOT_INFO                (0x00000001)
 
 
@@ -753,6 +794,7 @@ typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_1
 #define MPI2_IOUNITPAGE1_PAGEVERSION                    (0x04)
 
 /* IO Unit Page 1 Flags defines */
+#define MPI2_IOUNITPAGE1_ATA_SECURITY_FREEZE_LOCK       (0x00004000)
 #define MPI2_IOUNITPAGE1_ENABLE_HOST_BASED_DISCOVERY    (0x00000800)
 #define MPI2_IOUNITPAGE1_MASK_SATA_WRITE_CACHE          (0x00000600)
 #define MPI2_IOUNITPAGE1_SATA_WRITE_CACHE_SHIFT         (9)
@@ -824,7 +866,7 @@ typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_5 {
 #define MPI2_IOUNITPAGE5_PAGEVERSION                    (0x00)
 
 /* defines for IO Unit Page 5 DmaEngineCapabilities field */
-#define MPI2_IOUNITPAGE5_DMA_CAP_MASK_MAX_REQUESTS      (0xFF00)
+#define MPI2_IOUNITPAGE5_DMA_CAP_MASK_MAX_REQUESTS      (0xFFFF0000)
 #define MPI2_IOUNITPAGE5_DMA_CAP_SHIFT_MAX_REQUESTS     (16)
 
 #define MPI2_IOUNITPAGE5_DMA_CAP_EEDP                   (0x0008)
@@ -865,13 +907,17 @@ typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_7 {
     U16                     IOCTemperature;                         /* 0x10 */
     U8                      IOCTemperatureUnits;                    /* 0x12 */
     U8                      IOCSpeed;                               /* 0x13 */
-	U16                     BoardTemperature;              /* 0x14 */
-	U8                      BoardTemperatureUnits;         /* 0x16 */
-	U8                      Reserved3;                     /* 0x17 */
+	U16                     BoardTemperature;		    /* 0x14 */
+	U8                      BoardTemperatureUnits;		    /* 0x16 */
+	U8                      Reserved3;			    /* 0x17 */
+	U32                     Reserved4;                          /* 0x18 */
+	U32                     Reserved5;                          /* 0x1C */
+	U32                     Reserved6;                          /* 0x20 */
+	U32                     Reserved7;                          /* 0x24 */
 } MPI2_CONFIG_PAGE_IO_UNIT_7, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_IO_UNIT_7,
   Mpi2IOUnitPage7_t, MPI2_POINTER pMpi2IOUnitPage7_t;
 
-#define MPI2_IOUNITPAGE7_PAGEVERSION                    (0x02)
+#define MPI2_IOUNITPAGE7_PAGEVERSION                    (0x04)
 
 /* defines for IO Unit Page 7 PCIeWidth field */
 #define MPI2_IOUNITPAGE7_PCIE_WIDTH_X1              (0x01)
@@ -896,8 +942,8 @@ typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_7 {
 #define MPI2_IOUNITPAGE7_PMCAP_12_5_PCT_IOCSPEED    (0x00000400)
 #define MPI2_IOUNITPAGE7_PMCAP_25_0_PCT_IOCSPEED    (0x00000200)
 #define MPI2_IOUNITPAGE7_PMCAP_50_0_PCT_IOCSPEED    (0x00000100)
-#define MPI2_IOUNITPAGE7_PMCAP_PCIE_WIDTH_CHANGE    (0x00000008)
-#define MPI2_IOUNITPAGE7_PMCAP_PCIE_SPEED_CHANGE    (0x00000004)
+#define MPI2_IOUNITPAGE7_PMCAP_PCIE_WIDTH_CHANGE    (0x00000008) /* obsolete */
+#define MPI2_IOUNITPAGE7_PMCAP_PCIE_SPEED_CHANGE    (0x00000004) /* obsolete */
 
 /* defines for IO Unit Page 7 IOCTemperatureUnits field */
 #define MPI2_IOUNITPAGE7_IOC_TEMP_NOT_PRESENT       (0x00)
@@ -914,6 +960,120 @@ typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_7 {
 #define MPI2_IOUNITPAGE7_BOARD_TEMP_NOT_PRESENT     (0x00)
 #define MPI2_IOUNITPAGE7_BOARD_TEMP_FAHRENHEIT      (0x01)
 #define MPI2_IOUNITPAGE7_BOARD_TEMP_CELSIUS         (0x02)
+
+/* IO Unit Page 8 */
+
+#define MPI2_IOUNIT8_NUM_THRESHOLDS     (4)
+
+typedef struct _MPI2_IOUNIT8_SENSOR {
+	U16                     Flags;                /* 0x00 */
+	U16                     Reserved1;            /* 0x02 */
+	U16
+		Threshold[MPI2_IOUNIT8_NUM_THRESHOLDS]; /* 0x04 */
+	U32                     Reserved2;            /* 0x0C */
+	U32                     Reserved3;            /* 0x10 */
+	U32                     Reserved4;            /* 0x14 */
+} MPI2_IOUNIT8_SENSOR, MPI2_POINTER PTR_MPI2_IOUNIT8_SENSOR,
+Mpi2IOUnit8Sensor_t, MPI2_POINTER pMpi2IOUnit8Sensor_t;
+
+/* defines for IO Unit Page 8 Sensor Flags field */
+#define MPI2_IOUNIT8_SENSOR_FLAGS_T3_ENABLE         (0x0008)
+#define MPI2_IOUNIT8_SENSOR_FLAGS_T2_ENABLE         (0x0004)
+#define MPI2_IOUNIT8_SENSOR_FLAGS_T1_ENABLE         (0x0002)
+#define MPI2_IOUNIT8_SENSOR_FLAGS_T0_ENABLE         (0x0001)
+
+/*
+ * Host code (drivers, BIOS, utilities, etc.) should leave this define set to
+ * one and check the value returned for NumSensors at runtime.
+ */
+#ifndef MPI2_IOUNITPAGE8_SENSOR_ENTRIES
+#define MPI2_IOUNITPAGE8_SENSOR_ENTRIES     (1)
+#endif
+
+typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_8 {
+	MPI2_CONFIG_PAGE_HEADER Header;               /* 0x00 */
+	U32                     Reserved1;            /* 0x04 */
+	U32                     Reserved2;            /* 0x08 */
+	U8                      NumSensors;           /* 0x0C */
+	U8                      PollingInterval;      /* 0x0D */
+	U16                     Reserved3;            /* 0x0E */
+	MPI2_IOUNIT8_SENSOR
+			Sensor[MPI2_IOUNITPAGE8_SENSOR_ENTRIES];/* 0x10 */
+} MPI2_CONFIG_PAGE_IO_UNIT_8, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_IO_UNIT_8,
+Mpi2IOUnitPage8_t, MPI2_POINTER pMpi2IOUnitPage8_t;
+
+#define MPI2_IOUNITPAGE8_PAGEVERSION                    (0x00)
+
+
+/* IO Unit Page 9 */
+
+typedef struct _MPI2_IOUNIT9_SENSOR {
+	U16                     CurrentTemperature;     /* 0x00 */
+	U16                     Reserved1;              /* 0x02 */
+	U8                      Flags;                  /* 0x04 */
+	U8                      Reserved2;              /* 0x05 */
+	U16                     Reserved3;              /* 0x06 */
+	U32                     Reserved4;              /* 0x08 */
+	U32                     Reserved5;              /* 0x0C */
+} MPI2_IOUNIT9_SENSOR, MPI2_POINTER PTR_MPI2_IOUNIT9_SENSOR,
+Mpi2IOUnit9Sensor_t, MPI2_POINTER pMpi2IOUnit9Sensor_t;
+
+/* defines for IO Unit Page 9 Sensor Flags field */
+#define MPI2_IOUNIT9_SENSOR_FLAGS_TEMP_VALID        (0x01)
+
+/*
+ * Host code (drivers, BIOS, utilities, etc.) should leave this define set to
+ * one and check the value returned for NumSensors at runtime.
+ */
+#ifndef MPI2_IOUNITPAGE9_SENSOR_ENTRIES
+#define MPI2_IOUNITPAGE9_SENSOR_ENTRIES     (1)
+#endif
+
+typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_9 {
+	MPI2_CONFIG_PAGE_HEADER Header;                /* 0x00 */
+	U32                     Reserved1;             /* 0x04 */
+	U32                     Reserved2;             /* 0x08 */
+	U8                      NumSensors;            /* 0x0C */
+	U8                      Reserved4;             /* 0x0D */
+	U16                     Reserved3;             /* 0x0E */
+	MPI2_IOUNIT9_SENSOR
+			Sensor[MPI2_IOUNITPAGE9_SENSOR_ENTRIES];/* 0x10 */
+} MPI2_CONFIG_PAGE_IO_UNIT_9, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_IO_UNIT_9,
+Mpi2IOUnitPage9_t, MPI2_POINTER pMpi2IOUnitPage9_t;
+
+#define MPI2_IOUNITPAGE9_PAGEVERSION                    (0x00)
+
+
+/* IO Unit Page 10 */
+
+typedef struct _MPI2_IOUNIT10_FUNCTION {
+	U8                      CreditPercent;      /* 0x00 */
+	U8                      Reserved1;          /* 0x01 */
+	U16                     Reserved2;          /* 0x02 */
+} MPI2_IOUNIT10_FUNCTION, MPI2_POINTER PTR_MPI2_IOUNIT10_FUNCTION,
+Mpi2IOUnit10Function_t, MPI2_POINTER pMpi2IOUnit10Function_t;
+
+/*
+ * Host code (drivers, BIOS, utilities, etc.) should leave this define set to
+ * one and check the value returned for NumFunctions at runtime.
+ */
+#ifndef MPI2_IOUNITPAGE10_FUNCTION_ENTRIES
+#define MPI2_IOUNITPAGE10_FUNCTION_ENTRIES      (1)
+#endif
+
+typedef struct _MPI2_CONFIG_PAGE_IO_UNIT_10 {
+	MPI2_CONFIG_PAGE_HEADER Header;                    /* 0x00 */
+	U8                      NumFunctions;             /* 0x04 */
+	U8                      Reserved1;              /* 0x05 */
+	U16                     Reserved2;              /* 0x06 */
+	U32                     Reserved3;              /* 0x08 */
+	U32                     Reserved4;		/* 0x0C */
+	MPI2_IOUNIT10_FUNCTION
+		Function[MPI2_IOUNITPAGE10_FUNCTION_ENTRIES];/* 0x10 */
+} MPI2_CONFIG_PAGE_IO_UNIT_10, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_IO_UNIT_10,
+Mpi2IOUnitPage10_t, MPI2_POINTER pMpi2IOUnitPage10_t;
+
+#define MPI2_IOUNITPAGE10_PAGEVERSION                   (0x01)
 
 
 
@@ -1002,9 +1162,10 @@ typedef struct _MPI2_CONFIG_PAGE_IOC_6
 } MPI2_CONFIG_PAGE_IOC_6, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_IOC_6,
   Mpi2IOCPage6_t, MPI2_POINTER pMpi2IOCPage6_t;
 
-#define MPI2_IOCPAGE6_PAGEVERSION                       (0x04)
+#define MPI2_IOCPAGE6_PAGEVERSION                       (0x05)
 
 /* defines for IOC Page 6 CapabilitiesFlags */
+#define MPI2_IOCPAGE6_CAP_FLAGS_4K_SECTORS_SUPPORT      (0x00000020)
 #define MPI2_IOCPAGE6_CAP_FLAGS_RAID10_SUPPORT          (0x00000010)
 #define MPI2_IOCPAGE6_CAP_FLAGS_RAID1_SUPPORT           (0x00000008)
 #define MPI2_IOCPAGE6_CAP_FLAGS_RAID1E_SUPPORT          (0x00000004)
@@ -1022,12 +1183,12 @@ typedef struct _MPI2_CONFIG_PAGE_IOC_7
     U32                     Reserved1;                  /* 0x04 */
     U32                     EventMasks[MPI2_IOCPAGE7_EVENTMASK_WORDS];/* 0x08 */
     U16                     SASBroadcastPrimitiveMasks; /* 0x18 */
-    U16                     Reserved2;                  /* 0x1A */
+	U16                     SASNotifyPrimitiveMasks;    /* 0x1A */
     U32                     Reserved3;                  /* 0x1C */
 } MPI2_CONFIG_PAGE_IOC_7, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_IOC_7,
   Mpi2IOCPage7_t, MPI2_POINTER pMpi2IOCPage7_t;
 
-#define MPI2_IOCPAGE7_PAGEVERSION                       (0x01)
+#define MPI2_IOCPAGE7_PAGEVERSION                       (0x02)
 
 
 /* IOC Page 8 */
@@ -1075,24 +1236,49 @@ typedef struct _MPI2_CONFIG_PAGE_IOC_8
 
 typedef struct _MPI2_CONFIG_PAGE_BIOS_1
 {
-    MPI2_CONFIG_PAGE_HEADER Header;                     /* 0x00 */
-    U32                     BiosOptions;                /* 0x04 */
-    U32                     IOCSettings;                /* 0x08 */
-    U32                     Reserved1;                  /* 0x0C */
-    U32                     DeviceSettings;             /* 0x10 */
-    U16                     NumberOfDevices;            /* 0x14 */
-    U16                     Reserved2;                  /* 0x16 */
-    U16                     IOTimeoutBlockDevicesNonRM; /* 0x18 */
-    U16                     IOTimeoutSequential;        /* 0x1A */
-    U16                     IOTimeoutOther;             /* 0x1C */
-    U16                     IOTimeoutBlockDevicesRM;    /* 0x1E */
+	MPI2_CONFIG_PAGE_HEADER Header;                     /* 0x00 */
+	U32                     BiosOptions;                /* 0x04 */
+	U32                     IOCSettings;                /* 0x08 */
+	U8			SSUTimeout;		    /* 0x0C */
+	U8			Reserved1;		    /* 0x0D */
+	U16			Reserved2;		    /* 0x0E */
+	U32                     DeviceSettings;             /* 0x10 */
+	U16                     NumberOfDevices;            /* 0x14 */
+	U16                     UEFIVersion;                /* 0x16 */
+	U16                     IOTimeoutBlockDevicesNonRM; /* 0x18 */
+	U16                     IOTimeoutSequential;        /* 0x1A */
+	U16                     IOTimeoutOther;             /* 0x1C */
+	U16                     IOTimeoutBlockDevicesRM;    /* 0x1E */
 } MPI2_CONFIG_PAGE_BIOS_1, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_BIOS_1,
   Mpi2BiosPage1_t, MPI2_POINTER pMpi2BiosPage1_t;
 
-#define MPI2_BIOSPAGE1_PAGEVERSION                      (0x04)
+#define MPI2_BIOSPAGE1_PAGEVERSION                      (0x07)
 
 /* values for BIOS Page 1 BiosOptions field */
-#define MPI2_BIOSPAGE1_OPTIONS_DISABLE_BIOS             (0x00000001)
+#define MPI2_BIOSPAGE1_OPTIONS_PNS_MASK			(0x00003800)
+#define MPI2_BIOSPAGE1_OPTIONS_PNS_PBDHL			(0x00000000)
+#define MPI2_BIOSPAGE1_OPTIONS_PNS_ENCSLOSURE			(0x00000800)
+#define MPI2_BIOSPAGE1_OPTIONS_PNS_LWWID			(0x00001000)
+#define MPI2_BIOSPAGE1_OPTIONS_PNS_PSENS			(0x00001800)
+#define MPI2_BIOSPAGE1_OPTIONS_PNS_ESPHY			(0x00002000)
+
+#define MPI2_BIOSPAGE1_OPTIONS_X86_DISABLE_BIOS                 (0x00000400)
+
+#define MPI2_BIOSPAGE1_OPTIONS_MASK_REGISTRATION_UEFI_BSD       (0x00000300)
+#define MPI2_BIOSPAGE1_OPTIONS_USE_BIT0_REGISTRATION_UEFI_BSD   (0x00000000)
+#define MPI2_BIOSPAGE1_OPTIONS_FULL_REGISTRATION_UEFI_BSD       (0x00000100)
+#define MPI2_BIOSPAGE1_OPTIONS_ADAPTER_REGISTRATION_UEFI_BSD    (0x00000200)
+#define MPI2_BIOSPAGE1_OPTIONS_DISABLE_REGISTRATION_UEFI_BSD    (0x00000300)
+
+#define MPI2_BIOSPAGE1_OPTIONS_MASK_OEM_ID                  (0x000000F0)
+#define MPI2_BIOSPAGE1_OPTIONS_LSI_OEM_ID                   (0x00000000)
+
+#define MPI2_BIOSPAGE1_OPTIONS_MASK_UEFI_HII_REGISTRATION   (0x00000006)
+#define MPI2_BIOSPAGE1_OPTIONS_ENABLE_UEFI_HII              (0x00000000)
+#define MPI2_BIOSPAGE1_OPTIONS_DISABLE_UEFI_HII             (0x00000002)
+#define MPI2_BIOSPAGE1_OPTIONS_VERSION_CHECK_UEFI_HII       (0x00000004)
+
+#define MPI2_BIOSPAGE1_OPTIONS_DISABLE_BIOS                 (0x00000001)
 
 /* values for BIOS Page 1 IOCSettings field */
 #define MPI2_BIOSPAGE1_IOCSET_MASK_BOOT_PREFERENCE      (0x00030000)
@@ -1118,6 +1304,13 @@ typedef struct _MPI2_CONFIG_PAGE_BIOS_1
 #define MPI2_BIOSPAGE1_DEVSET_DISABLE_RM_LUN            (0x00000004)
 #define MPI2_BIOSPAGE1_DEVSET_DISABLE_NON_RM_LUN        (0x00000002)
 #define MPI2_BIOSPAGE1_DEVSET_DISABLE_OTHER_LUN         (0x00000001)
+
+/* defines for BIOS Page 1 UEFIVersion field */
+#define MPI2_BIOSPAGE1_UEFI_VER_MAJOR_MASK              (0xFF00)
+#define MPI2_BIOSPAGE1_UEFI_VER_MAJOR_SHIFT             (8)
+#define MPI2_BIOSPAGE1_UEFI_VER_MINOR_MASK              (0x00FF)
+#define MPI2_BIOSPAGE1_UEFI_VER_MINOR_SHIFT             (0)
+
 
 
 /* BIOS Page 2 */
@@ -1651,6 +1844,7 @@ typedef struct _MPI2_CONFIG_PAGE_RD_PDISK_1
 #define MPI2_SAS_PRATE_MAX_RATE_1_5                     (0x80)
 #define MPI2_SAS_PRATE_MAX_RATE_3_0                     (0x90)
 #define MPI2_SAS_PRATE_MAX_RATE_6_0                     (0xA0)
+#define MPI25_SAS_PRATE_MAX_RATE_12_0                   (0xB0)
 #define MPI2_SAS_PRATE_MIN_RATE_MASK                    (0x0F)
 #define MPI2_SAS_PRATE_MIN_RATE_NOT_PROGRAMMABLE        (0x00)
 #define MPI2_SAS_PRATE_MIN_RATE_1_5                     (0x08)
@@ -1663,6 +1857,7 @@ typedef struct _MPI2_CONFIG_PAGE_RD_PDISK_1
 #define MPI2_SAS_HWRATE_MAX_RATE_1_5                    (0x80)
 #define MPI2_SAS_HWRATE_MAX_RATE_3_0                    (0x90)
 #define MPI2_SAS_HWRATE_MAX_RATE_6_0                    (0xA0)
+#define MPI25_SAS_HWRATE_MAX_RATE_12_0                  (0xB0)
 #define MPI2_SAS_HWRATE_MIN_RATE_MASK                   (0x0F)
 #define MPI2_SAS_HWRATE_MIN_RATE_1_5                    (0x08)
 #define MPI2_SAS_HWRATE_MIN_RATE_3_0                    (0x09)
@@ -1848,9 +2043,13 @@ typedef struct _MPI2_SAS_IOUNIT4_SPINUP_GROUP
 {
     U8          MaxTargetSpinup;            /* 0x00 */
     U8          SpinupDelay;                /* 0x01 */
-    U16         Reserved1;                  /* 0x02 */
+	U8          SpinupFlags;                /* 0x02 */
+	U8          Reserved1;                  /* 0x03 */
 } MPI2_SAS_IOUNIT4_SPINUP_GROUP, MPI2_POINTER PTR_MPI2_SAS_IOUNIT4_SPINUP_GROUP,
   Mpi2SasIOUnit4SpinupGroup_t, MPI2_POINTER pMpi2SasIOUnit4SpinupGroup_t;
+
+/* defines for SAS IO Unit Page 4 SpinupFlags */
+#define MPI2_SASIOUNIT4_SPINUP_DISABLE_FLAG         (0x01)
 
 /*
  * Host code (drivers, BIOS, utilities, etc.) should leave this define set to
@@ -2070,18 +2269,39 @@ typedef struct _MPI2_CONFIG_PAGE_SASIOUNIT_8 {
 #define MPI2_SASIOUNITPAGE8_PAGEVERSION     (0x00)
 
 /* defines for PowerManagementCapabilities field */
-#define MPI2_SASIOUNIT8_PM_HOST_PORT_WIDTH_MOD          (0x000001000)
-#define MPI2_SASIOUNIT8_PM_HOST_SAS_SLUMBER_MODE        (0x000000800)
-#define MPI2_SASIOUNIT8_PM_HOST_SAS_PARTIAL_MODE        (0x000000400)
-#define MPI2_SASIOUNIT8_PM_HOST_SATA_SLUMBER_MODE       (0x000000200)
-#define MPI2_SASIOUNIT8_PM_HOST_SATA_PARTIAL_MODE       (0x000000100)
-#define MPI2_SASIOUNIT8_PM_IOUNIT_PORT_WIDTH_MOD        (0x000000010)
-#define MPI2_SASIOUNIT8_PM_IOUNIT_SAS_SLUMBER_MODE      (0x000000008)
-#define MPI2_SASIOUNIT8_PM_IOUNIT_SAS_PARTIAL_MODE      (0x000000004)
-#define MPI2_SASIOUNIT8_PM_IOUNIT_SATA_SLUMBER_MODE     (0x000000002)
-#define MPI2_SASIOUNIT8_PM_IOUNIT_SATA_PARTIAL_MODE     (0x000000001)
+#define MPI2_SASIOUNIT8_PM_HOST_PORT_WIDTH_MOD          (0x00001000)
+#define MPI2_SASIOUNIT8_PM_HOST_SAS_SLUMBER_MODE        (0x00000800)
+#define MPI2_SASIOUNIT8_PM_HOST_SAS_PARTIAL_MODE        (0x00000400)
+#define MPI2_SASIOUNIT8_PM_HOST_SATA_SLUMBER_MODE       (0x00000200)
+#define MPI2_SASIOUNIT8_PM_HOST_SATA_PARTIAL_MODE       (0x00000100)
+#define MPI2_SASIOUNIT8_PM_IOUNIT_PORT_WIDTH_MOD        (0x00000010)
+#define MPI2_SASIOUNIT8_PM_IOUNIT_SAS_SLUMBER_MODE      (0x00000008)
+#define MPI2_SASIOUNIT8_PM_IOUNIT_SAS_PARTIAL_MODE      (0x00000004)
+#define MPI2_SASIOUNIT8_PM_IOUNIT_SATA_SLUMBER_MODE     (0x00000002)
+#define MPI2_SASIOUNIT8_PM_IOUNIT_SATA_PARTIAL_MODE     (0x00000001)
 
 
+
+/* SAS IO Unit Page 16 */
+
+typedef struct _MPI2_CONFIG_PAGE_SASIOUNIT16 {
+	MPI2_CONFIG_EXTENDED_PAGE_HEADER  Header;                  /* 0x00 */
+	U64                         TimeStamp;                     /* 0x08 */
+	U32                         Reserved1;                     /* 0x10 */
+	U32                         Reserved2;                     /* 0x14 */
+	U32                         FastPathPendedRequests;        /* 0x18 */
+	U32                         FastPathUnPendedRequests;      /* 0x1C */
+	U32                         FastPathHostRequestStarts;     /* 0x20 */
+	U32                         FastPathFirmwareRequestStarts; /* 0x24 */
+	U32                         FastPathHostCompletions;       /* 0x28 */
+	U32                         FastPathFirmwareCompletions;   /* 0x2C */
+	U32                         NonFastPathRequestStarts;      /* 0x30 */
+	U32			    NonFastPathHostCompletions;    /* 0x30 */
+} MPI2_CONFIG_PAGE_SASIOUNIT16,
+MPI2_POINTER PTR_MPI2_CONFIG_PAGE_SASIOUNIT16,
+Mpi2SasIOUnitPage16_t, MPI2_POINTER pMpi2SasIOUnitPage16_t;
+
+#define MPI2_SASIOUNITPAGE16_PAGEVERSION    (0x00)
 
 
 /****************************************************************************
@@ -2199,13 +2419,12 @@ typedef struct _MPI2_CONFIG_PAGE_EXPANDER_1
 
 /* use MPI2_SAS_NEG_LINK_RATE_ defines for the NegotiatedLinkRate field */
 
-/* use MPI2_SAS_APHYINFO_ defines for AttachedPhyInfo field */
-
 /* values for SAS Expander Page 1 DiscoveryInfo field */
 #define MPI2_SAS_EXPANDER1_DISCINFO_BAD_PHY_DISABLED    (0x04)
 #define MPI2_SAS_EXPANDER1_DISCINFO_LINK_STATUS_CHANGE  (0x02)
 #define MPI2_SAS_EXPANDER1_DISCINFO_NO_ROUTING_ENTRIES  (0x01)
 
+/* use MPI2_SAS_APHYINFO_ defines for AttachedPhyInfo field */
 
 /****************************************************************************
 *   SAS Device Config Pages
@@ -2233,13 +2452,13 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_DEV_0
     U8                                  PortGroups;             /* 0x2C */
     U8                                  DmaGroup;               /* 0x2D */
     U8                                  ControlGroup;           /* 0x2E */
-    U8                                  Reserved1;              /* 0x2F */
-    U32                                 Reserved2;              /* 0x30 */
+	U8				 EnclosureLevel;	 /* 0x2F */
+	U8				 ConnectorName[4];	 /* 0x30 */
     U32                                 Reserved3;              /* 0x34 */
 } MPI2_CONFIG_PAGE_SAS_DEV_0, MPI2_POINTER PTR_MPI2_CONFIG_PAGE_SAS_DEV_0,
   Mpi2SasDevicePage0_t, MPI2_POINTER pMpi2SasDevicePage0_t;
 
-#define MPI2_SASDEVICE0_PAGEVERSION         (0x08)
+#define MPI2_SASDEVICE0_PAGEVERSION         (0x09)
 
 /* values for SAS Device Page 0 AccessStatus field */
 #define MPI2_SAS_DEVICE0_ASTATUS_NO_ERRORS                  (0x00)
@@ -2266,6 +2485,7 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_DEV_0
 /* see mpi2_sas.h for values for SAS Device Page 0 DeviceInfo values */
 
 /* values for SAS Device Page 0 Flags field */
+#define MPI2_SAS_DEVICE0_FLAGS_UNAUTHORIZED_DEVICE          (0x8000)
 #define MPI2_SAS_DEVICE0_FLAGS_SLUMBER_PM_CAPABLE           (0x1000)
 #define MPI2_SAS_DEVICE0_FLAGS_PARTIAL_PM_CAPABLE           (0x0800)
 #define MPI2_SAS_DEVICE0_FLAGS_SATA_ASYNCHRONOUS_NOTIFY     (0x0400)
@@ -2276,6 +2496,7 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_DEV_0
 #define MPI2_SAS_DEVICE0_FLAGS_SATA_NCQ_SUPPORTED           (0x0020)
 #define MPI2_SAS_DEVICE0_FLAGS_SATA_FUA_SUPPORTED           (0x0010)
 #define MPI2_SAS_DEVICE0_FLAGS_PORT_SELECTOR_ATTACH         (0x0008)
+#define MPI2_SAS_DEVICE0_FLAGS_ENCL_LEVEL_VALID             (0x0002)
 #define MPI2_SAS_DEVICE0_FLAGS_DEVICE_PRESENT               (0x0001)
 
 
@@ -2324,6 +2545,8 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_PHY_0
 
 #define MPI2_SASPHY0_PAGEVERSION            (0x03)
 
+/* use MPI2_SAS_APHYINFO_ defines for AttachedPhyInfo field */
+
 /* use MPI2_SAS_PRATE_ defines for the ProgrammedLinkRate field */
 
 /* use MPI2_SAS_HWRATE_ defines for the HwLinkRate field */
@@ -2331,11 +2554,9 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_PHY_0
 /* values for SAS PHY Page 0 Flags field */
 #define MPI2_SAS_PHY0_FLAGS_SGPIO_DIRECT_ATTACH_ENC             (0x01)
 
-/* use MPI2_SAS_APHYINFO_ defines for AttachedPhyInfo field */
+/* use MPI2_SAS_PHYINFO_ for the PhyInfo field */
 
 /* use MPI2_SAS_NEG_LINK_RATE_ defines for the NegotiatedLinkRate field */
-
-/* use MPI2_SAS_PHYINFO_ for the PhyInfo field */
 
 
 /* SAS PHY Page 1 */
@@ -2544,7 +2765,8 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_ENCLOSURE_0
     U16                                 EnclosureHandle;            /* 0x16 */
     U16                                 NumSlots;                   /* 0x18 */
     U16                                 StartSlot;                  /* 0x1A */
-    U16                                 Reserved2;                  /* 0x1C */
+	U8				 Reserved2;		     /* 0x1C */
+	U8				 EnclosureLevel;	     /* 0x1D */
     U16                                 SEPDevHandle;               /* 0x1E */
     U32                                 Reserved3;                  /* 0x20 */
     U32                                 Reserved4;                  /* 0x24 */
@@ -2552,9 +2774,10 @@ typedef struct _MPI2_CONFIG_PAGE_SAS_ENCLOSURE_0
   MPI2_POINTER PTR_MPI2_CONFIG_PAGE_SAS_ENCLOSURE_0,
   Mpi2SasEnclosurePage0_t, MPI2_POINTER pMpi2SasEnclosurePage0_t;
 
-#define MPI2_SASENCLOSURE0_PAGEVERSION      (0x03)
+#define MPI2_SASENCLOSURE0_PAGEVERSION      (0x04)
 
 /* values for SAS Enclosure Page 0 Flags field */
+#define MPI2_SAS_ENCLS0_FLAGS_ENCL_LEVEL_VALID      (0x0010)
 #define MPI2_SAS_ENCLS0_FLAGS_MNG_MASK              (0x000F)
 #define MPI2_SAS_ENCLS0_FLAGS_MNG_UNKNOWN           (0x0000)
 #define MPI2_SAS_ENCLS0_FLAGS_MNG_IOC_SES           (0x0001)

@@ -21,16 +21,17 @@
 #include <linux/platform_device.h>
 #include <linux/input-polldev.h>
 #include <linux/regulator/consumer.h>
+#include <linux/miscdevice.h>
 
 /*
  * This driver tries to support the "digital" accelerometer chips from
  * STMicroelectronics such as LIS3LV02DL, LIS302DL, LIS3L02DQ, LIS331DL,
- * LIS35DE, or LIS202DL. They are very similar in terms of programming, with
- * almost the same registers. In addition to differing on physical properties,
- * they differ on the number of axes (2/3), precision (8/12 bits), and special
- * features (freefall detection, click...). Unfortunately, not all the
- * differences can be probed via a register.
- * They can be connected either via I²C or SPI.
+ * LIS331DLH, LIS35DE, or LIS202DL. They are very similar in terms of
+ * programming, with almost the same registers. In addition to differing
+ * on physical properties, they differ on the number of axes (2/3),
+ * precision (8/12 bits), and special features (freefall detection,
+ * click...). Unfortunately, not all the differences can be probed via
+ * a register. They can be connected either via I²C or SPI.
  */
 
 #include <linux/lis3lv02d.h>
@@ -94,14 +95,8 @@ enum lis3lv02d_reg {
 	DD_THSE_H	= 0x3F,
 };
 
-enum lis331dlh_reg {
-	CTRL_REG5	= 0x24,
-	HP_FILTER_RESET_3DLH	= 0x25,
-	REFERENCE	= 0x26,
-};
-
 enum lis3_who_am_i {
-	WAI_3DLH	= 0x32,	/* 8 bits: LIS331DLH */
+	WAI_3DLH	= 0x32,	/* 16 bits: LIS331DLH */
 	WAI_3DC		= 0x33,	/* 8 bits: LIS3DC, HP3DC */
 	WAI_12B		= 0x3A, /* 12 bits: LIS3LV02D[LQ]... */
 	WAI_8B		= 0x3B, /* 8 bits: LIS[23]02D[LQ]... */
@@ -109,9 +104,9 @@ enum lis3_who_am_i {
 };
 
 enum lis3_type {
+	LIS3LV02D,
 	LIS3DC,
 	HP3DC,
-	LIS3LV02D,
 	LIS2302D,
 	LIS331DLF,
 	LIS331DLH,
@@ -165,11 +160,6 @@ enum lis331dlh_ctrl4 {
 	CTRL4_BDU	= 0x80,
 };
 
-enum lis331dlh_ctrl5 {
-	CTRL5_TURNON0	= 0x01,
-	CTRL5_TURNON1	= 0x20,
-};
-
 enum lis3lv02d_ctrl2 {
 	CTRL2_DAS	= 0x01,
 	CTRL2_SIM	= 0x02,
@@ -187,13 +177,6 @@ enum lis3lv02d_ctrl4_3dc {
 	CTRL4_ST1	= 0x04,
 	CTRL4_FS0	= 0x10,
 	CTRL4_FS1	= 0x20,
-};
-
-/* Measurement Range */
-enum lis3lv02d_fs {
-	FS_2G_REGVAL = 0x00,
-	FS_4G_REGVAL = 0x10,
-	FS_8G_REGVAL = 0x30,
 };
 
 enum lis302d_ctrl2 {
@@ -233,10 +216,6 @@ enum lis3lv02d_ff_wu_cfg {
 	FF_WU_CFG_AOI	= 0x80,
 };
 
-enum lis331dlh_ff_wu_cfg {
-	FF_WU_CFG_6D	= 0x40,
-};
-
 enum lis3lv02d_ff_wu_src {
 	FF_WU_SRC_XL	= 0x01,
 	FF_WU_SRC_XH	= 0x02,
@@ -256,10 +235,6 @@ enum lis3lv02d_dd_cfg {
 	DD_CFG_ZHIE	= 0x20,
 	DD_CFG_LIR	= 0x40,
 	DD_CFG_IEND	= 0x80,
-};
-
-enum lis331dlh_dd_cfg {
-	DD_CFG_6D	= 0x40,
 };
 
 enum lis3lv02d_dd_src {
@@ -330,21 +305,27 @@ struct lis3lv02d {
 	struct fasync_struct	*async_queue; /* queue for the misc device */
 	wait_queue_head_t	misc_wait; /* Wait queue for the misc device */
 	unsigned long		misc_opened; /* bit0: whether the device is open */
+	struct miscdevice	miscdev;
+
 	int                     data_ready_count[2];
 	atomic_t		wake_thread;
 	unsigned char           irq_cfg;
+	unsigned int		shift_adj;
 
 	struct lis3lv02d_platform_data *pdata;	/* for passing board config */
 	struct mutex		mutex;     /* Serialize poll and selftest */
-	u8			g_range; /* Hold the g range */
-	u8			shift_adj;
+
+#ifdef CONFIG_OF
+	struct device_node	*of_node;
+#endif
 };
 
 int lis3lv02d_init_device(struct lis3lv02d *lis3);
-int lis3lv02d_joystick_enable(void);
-void lis3lv02d_joystick_disable(void);
+int lis3lv02d_joystick_enable(struct lis3lv02d *lis3);
+void lis3lv02d_joystick_disable(struct lis3lv02d *lis3);
 void lis3lv02d_poweroff(struct lis3lv02d *lis3);
-void lis3lv02d_poweron(struct lis3lv02d *lis3);
+int lis3lv02d_poweron(struct lis3lv02d *lis3);
 int lis3lv02d_remove_fs(struct lis3lv02d *lis3);
+int lis3lv02d_init_dt(struct lis3lv02d *lis3);
 
 extern struct lis3lv02d lis3_dev;

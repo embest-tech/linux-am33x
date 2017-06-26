@@ -32,13 +32,12 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/init.h>
 #include <linux/blkdev.h>
 #include <linux/delay.h>
 #include <scsi/scsi_host.h>
 #include <linux/libata.h>
 
-#define DRV_NAME	"sc1200"
+#define DRV_NAME	"pata_sc1200"
 #define DRV_VERSION	"0.2.6"
 
 #define SC1200_REV_A	0x00
@@ -86,10 +85,14 @@ static int sc1200_clock(void)
 static void sc1200_set_piomode(struct ata_port *ap, struct ata_device *adev)
 {
 	static const u32 pio_timings[4][5] = {
-		{0x00009172, 0x00012171, 0x00020080, 0x00032010, 0x00040010},	// format0  33Mhz
-		{0xd1329172, 0x71212171, 0x30200080, 0x20102010, 0x00100010},	// format1, 33Mhz
-		{0xfaa3f4f3, 0xc23232b2, 0x513101c1, 0x31213121, 0x10211021},	// format1, 48Mhz
-		{0xfff4fff4, 0xf35353d3, 0x814102f1, 0x42314231, 0x11311131}	// format1, 66Mhz
+		/* format0, 33Mhz */
+		{ 0x00009172, 0x00012171, 0x00020080, 0x00032010, 0x00040010 },
+		/* format1, 33Mhz */
+		{ 0xd1329172, 0x71212171, 0x30200080, 0x20102010, 0x00100010 },
+		/* format1, 48Mhz */
+		{ 0xfaa3f4f3, 0xc23232b2, 0x513101c1, 0x31213121, 0x10211021 },
+		/* format1, 66Mhz */
+		{ 0xfff4fff4, 0xf35353d3, 0x814102f1, 0x42314231, 0x11311131 }
 	};
 
 	struct pci_dev *pdev = to_pci_dev(ap->host->dev);
@@ -251,27 +254,16 @@ static struct pci_driver sc1200_pci_driver = {
 	.id_table	= sc1200,
 	.probe 		= sc1200_init_one,
 	.remove		= ata_pci_remove_one,
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_SLEEP
 	.suspend	= ata_pci_device_suspend,
 	.resume		= ata_pci_device_resume,
 #endif
 };
 
-static int __init sc1200_init(void)
-{
-	return pci_register_driver(&sc1200_pci_driver);
-}
-
-static void __exit sc1200_exit(void)
-{
-	pci_unregister_driver(&sc1200_pci_driver);
-}
+module_pci_driver(sc1200_pci_driver);
 
 MODULE_AUTHOR("Alan Cox, Mark Lord");
 MODULE_DESCRIPTION("low-level driver for the NS/AMD SC1200");
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, sc1200);
 MODULE_VERSION(DRV_VERSION);
-
-module_init(sc1200_init);
-module_exit(sc1200_exit);

@@ -30,12 +30,19 @@ extern struct oprofile_operations oprofile_ops;
 extern unsigned long oprofile_started;
 extern unsigned long oprofile_backtrace_depth;
 
-struct super_block;
 struct dentry;
 
-void oprofile_create_files(struct super_block *sb, struct dentry *root);
+void oprofile_create_files(struct dentry *root);
 int oprofile_timer_init(struct oprofile_operations *ops);
-void oprofile_timer_exit(void);
+#ifdef CONFIG_OPROFILE_NMI_TIMER
+int op_nmi_timer_init(struct oprofile_operations *ops);
+#else
+static inline int op_nmi_timer_init(struct oprofile_operations *ops)
+{
+	return -ENODEV;
+}
+#endif
+
 
 int oprofile_set_ulong(unsigned long *addr, unsigned long val);
 int oprofile_set_timeout(unsigned long time);

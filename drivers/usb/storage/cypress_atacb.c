@@ -41,9 +41,9 @@ MODULE_LICENSE("GPL");
 		    vendorName, productName, useProtocol, useTransport, \
 		    initFunction, flags) \
 { USB_DEVICE_VER(id_vendor, id_product, bcdDeviceMin, bcdDeviceMax), \
-  .driver_info = (flags)|(USB_US_TYPE_STOR<<24) }
+  .driver_info = (flags) }
 
-struct usb_device_id cypress_usb_ids[] = {
+static struct usb_device_id cypress_usb_ids[] = {
 #	include "unusual_cypress.h"
 	{ }		/* Terminating entry */
 };
@@ -96,13 +96,13 @@ static void cypress_atacb_passthrough(struct scsi_cmnd *srb, struct us_data *us)
 	if (save_cmnd[1] >> 5) /* MULTIPLE_COUNT */
 		goto invalid_fld;
 	/* check protocol */
-	switch((save_cmnd[1] >> 1) & 0xf) {
-		case 3: /*no DATA */
-		case 4: /* PIO in */
-		case 5: /* PIO out */
-			break;
-		default:
-			goto invalid_fld;
+	switch ((save_cmnd[1] >> 1) & 0xf) {
+	case 3: /*no DATA */
+	case 4: /* PIO in */
+	case 5: /* PIO out */
+		break;
+	default:
+		goto invalid_fld;
 	}
 
 	/* first build the ATACB command */
@@ -132,8 +132,7 @@ static void cypress_atacb_passthrough(struct scsi_cmnd *srb, struct us_data *us)
 					|| save_cmnd[11])
 				goto invalid_fld;
 		}
-	}
-	else { /* ATA12 */
+	} else { /* ATA12 */
 		srb->cmnd[ 6] = save_cmnd[3]; /* features */
 		srb->cmnd[ 7] = save_cmnd[4]; /* sector count */
 		srb->cmnd[ 8] = save_cmnd[5]; /* lba low */
@@ -159,7 +158,7 @@ static void cypress_atacb_passthrough(struct scsi_cmnd *srb, struct us_data *us)
 	if (srb->result == SAM_STAT_CHECK_CONDITION &&
 			memcmp(srb->sense_buffer, usb_stor_sense_invalidCDB,
 				sizeof(usb_stor_sense_invalidCDB)) == 0) {
-		US_DEBUGP("cypress atacb not supported ???\n");
+		usb_stor_dbg(us, "cypress atacb not supported ???\n");
 		goto end;
 	}
 
@@ -248,14 +247,26 @@ static int cypress_probe(struct usb_interface *intf,
 {
 	struct us_data *us;
 	int result;
+	struct usb_device *device;
 
 	result = usb_stor_probe1(&us, intf, id,
 			(id - cypress_usb_ids) + cypress_unusual_dev_list);
 	if (result)
 		return result;
 
-	us->protocol_name = "Transparent SCSI with Cypress ATACB";
-	us->proto_handler = cypress_atacb_passthrough;
+	/* Among CY7C68300 chips, the A revision does not support Cypress ATACB
+	 * Filter out this revision from EEPROM default descriptor values
+	 */
+	device = interface_to_usbdev(intf);
+	if (device->descriptor.iManufacturer != 0x38 ||
+	    device->descriptor.iProduct != 0x4e ||
+	    device->descriptor.iSerialNumber != 0x64) {
+		us->protocol_name = "Transparent SCSI with Cypress ATACB";
+		us->proto_handler = cypress_atacb_passthrough;
+	} else {
+		us->protocol_name = "Transparent SCSI";
+		us->proto_handler = usb_stor_transparent_scsi_command;
+	}
 
 	result = usb_stor_probe2(us);
 	return result;
@@ -272,17 +283,7 @@ static struct usb_driver cypress_driver = {
 	.post_reset =	usb_stor_post_reset,
 	.id_table =	cypress_usb_ids,
 	.soft_unbind =	1,
+	.no_dynamic_id = 1,
 };
 
-static int __init cypress_init(void)
-{
-	return usb_register(&cypress_driver);
-}
-
-static void __exit cypress_exit(void)
-{
-	usb_deregister(&cypress_driver);
-}
-
-module_init(cypress_init);
-module_exit(cypress_exit);
+module_usb_driver(cypress_driver);

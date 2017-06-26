@@ -17,17 +17,76 @@
  * GNU General Public License for more details.
  */
 #include <linux/module.h>
-#include <linux/opp.h>
-#include <linux/clk.h>
+#include <linux/of.h>
+#include <linux/pm_opp.h>
+#include <linux/cpu.h>
 
-#include <plat/omap_device.h>
-#include <plat/dvfs.h>
-#include <plat/clock.h>
+#include "omap_device.h"
 
 #include "omap_opp_data.h"
 
 /* Temp variable to allow multiple calls */
 static u8 __initdata omap_table_init;
+
+/*
+ * opp_def_list_enable_opp() - enable opp by hwmod_name and frequency
+ * @list:	opp default list for this silicon
+ * @size:	number of opp entries for this silicon
+ * @hwmod_name: hwmod for which the provided opp_freq exists
+ * @opp_freq:	frequency for which the state should be updated
+ * @state:	new state to set for opp availability
+ */
+int __init opp_def_list_enable_opp(struct omap_opp_def *list,
+				   unsigned int size,
+				   const char *hwmod_name,
+				   unsigned long opp_freq, bool state)
+{
+	int i;
+
+	for (i = 0; i < size; i++) {
+		struct omap_opp_def *entry = &list[i];
+
+		if (entry->hwmod_name == hwmod_name &&
+		    entry->freq == opp_freq) {
+			entry->default_available = state;
+			return 0;
+		}
+	}
+	WARN(1, "Unable to find opp for %s, frequency %ld\n",
+	     hwmod_name, opp_freq);
+	return -EINVAL;
+}
+
+/**
+ * opp_def_list_update_voltage_opp() - update opp u_volt entry by hwmod_name
+ *				       and frequency
+ * @list:	opp default list for this silicon
+ * @size:	number of opp entries for this silicon
+ * @hwmod_name: hwmod for which the provided opp_freq exists
+ * @opp_freq:	frequency for which the voltage should be updated
+ * @u_volt:	new voltage value for the provided opp
+ */
+int __init opp_def_list_update_opp_voltage(struct omap_opp_def *list,
+					   unsigned int size,
+					   const char *hwmod_name,
+					   unsigned long opp_freq,
+					   unsigned long u_volt)
+{
+	int i;
+
+	for (i = 0; i < size; i++) {
+		struct omap_opp_def *entry = &list[i];
+
+		if (entry->hwmod_name == hwmod_name &&
+		    entry->freq == opp_freq) {
+			entry->u_volt = u_volt;
+			return 0;
+		}
+	}
+	WARN(1, "Unable to find opp for %s, frequency %ld\n",
+	     hwmod_name, opp_freq);
+	return -EINVAL;
+}
 
 /**
  * omap_init_opp_table() - Initialize opp table as per the CPU type
@@ -41,8 +100,6 @@ int __init omap_init_opp_table(struct omap_opp_def *opp_def,
 		u32 opp_def_size)
 {
 	int i, r;
-	struct clk *clk;
-	long round_rate;
 
 	if (!opp_def || !opp_def_size) {
 		pr_err("%s: invalid params!\n", __func__);
@@ -58,62 +115,46 @@ int __init omap_init_opp_table(struct omap_opp_def *opp_def,
 	omap_table_init = 1;
 
 	/* Lets now register with OPP library */
-	for (i = 0; i < opp_def_size; i++) {
+	for (i = 0; i < opp_def_size; i++, opp_def++) {
 		struct omap_hwmod *oh;
 		struct device *dev;
 
 		if (!opp_def->hwmod_name) {
-			WARN(1, "%s: NULL name of omap_hwmod, failing"
-				" [%d].\n", __func__, i);
-			goto next;
+			pr_err("%s: NULL name of omap_hwmod, failing [%d].\n",
+				__func__, i);
+			return -EINVAL;
 		}
-		oh = omap_hwmod_lookup(opp_def->hwmod_name);
-		if (!oh || !oh->od) {
-			WARN(1, "%s: no hwmod or odev for %s, [%d] "
-				"cannot add OPPs.\n", __func__,
-				opp_def->hwmod_name, i);
-			goto next;
-		}
-		dev = &oh->od->pdev->dev;
 
-		clk = omap_clk_get_by_name(opp_def->clk_name);
-		if (clk) {
-			round_rate = clk_round_rate(clk, opp_def->freq);
-			if (round_rate > 0) {
-				opp_def->freq = round_rate;
-			} else {
-				WARN(1, "%s: round_rate for clock %s failed\n",
-					__func__, opp_def->clk_name);
-				goto next; /* skip Bad OPP */
-			}
+		if (!strncmp(opp_def->hwmod_name, "mpu", 3)) {
+			/* 
+			 * All current OMAPs share voltage rail and
+			 * clock source, so CPU0 is used to represent
+			 * the MPU-SS.
+			 */
+			dev = get_cpu_device(0);
 		} else {
-			WARN(1, "%s: No clock by name %s found\n", __func__,
-				opp_def->clk_name);
-			goto next; /* skip Bad OPP */
+			oh = omap_hwmod_lookup(opp_def->hwmod_name);
+			if (!oh || !oh->od) {
+				pr_debug("%s: no hwmod or odev for %s, [%d] cannot add OPPs.\n",
+					 __func__, opp_def->hwmod_name, i);
+				continue;
+			}
+			dev = &oh->od->pdev->dev;
 		}
-		r = opp_add(dev, opp_def->freq, opp_def->u_volt);
+
+		r = dev_pm_opp_add(dev, opp_def->freq, opp_def->u_volt);
 		if (r) {
-			dev_err(dev, "%s: add OPP %ld failed for %s [%d] "
-				"result=%d\n",
-			       __func__, opp_def->freq,
-			       opp_def->hwmod_name, i, r);
+			dev_err(dev, "%s: add OPP %ld failed for %s [%d] result=%d\n",
+				__func__, opp_def->freq,
+				opp_def->hwmod_name, i, r);
 		} else {
 			if (!opp_def->default_available)
-				r = opp_disable(dev, opp_def->freq);
+				r = dev_pm_opp_disable(dev, opp_def->freq);
 			if (r)
-				dev_err(dev, "%s: disable %ld failed for %s "
-					"[%d] result=%d\n",
+				dev_err(dev, "%s: disable %ld failed for %s [%d] result=%d\n",
 					__func__, opp_def->freq,
 					opp_def->hwmod_name, i, r);
-
-			r  = omap_dvfs_register_device(dev,
-				opp_def->voltdm_name, opp_def->clk_name);
-			if (r)
-				dev_err(dev, "%s:%s:err dvfs register %d %d\n",
-					__func__, opp_def->hwmod_name, r, i);
 		}
-next:
-		opp_def++;
 	}
 
 	return 0;

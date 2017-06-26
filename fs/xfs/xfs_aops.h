@@ -18,25 +18,21 @@
 #ifndef __XFS_AOPS_H__
 #define __XFS_AOPS_H__
 
-extern struct workqueue_struct *xfsdatad_workqueue;
-extern struct workqueue_struct *xfsconvertd_workqueue;
 extern mempool_t *xfs_ioend_pool;
 
 /*
  * Types of I/O for bmap clustering and I/O completion tracking.
  */
 enum {
-	IO_DIRECT = 0,	/* special case for direct I/O ioends */
-	IO_DELALLOC,	/* mapping covers delalloc region */
-	IO_UNWRITTEN,	/* mapping covers allocated but uninitialized data */
-	IO_OVERWRITE,	/* mapping covers already allocated extent */
+	XFS_IO_DELALLOC,	/* covers delalloc region */
+	XFS_IO_UNWRITTEN,	/* covers allocated but uninitialized data */
+	XFS_IO_OVERWRITE,	/* covers already allocated extent */
 };
 
 #define XFS_IO_TYPES \
-	{ 0,			"" }, \
-	{ IO_DELALLOC,		"delalloc" }, \
-	{ IO_UNWRITTEN,		"unwritten" }, \
-	{ IO_OVERWRITE,		"overwrite" }
+	{ XFS_IO_DELALLOC,		"delalloc" }, \
+	{ XFS_IO_UNWRITTEN,		"unwritten" }, \
+	{ XFS_IO_OVERWRITE,		"overwrite" }
 
 /*
  * xfs_ioend struct manages large extent writes for XFS.
@@ -53,15 +49,11 @@ typedef struct xfs_ioend {
 	size_t			io_size;	/* size of the extent */
 	xfs_off_t		io_offset;	/* offset in the file */
 	struct work_struct	io_work;	/* xfsdatad work queue */
-	struct kiocb		*io_iocb;
-	int			io_result;
+	struct xfs_trans	*io_append_trans;/* xact. for size update */
 } xfs_ioend_t;
 
 extern const struct address_space_operations xfs_address_space_operations;
 extern int xfs_get_blocks(struct inode *, sector_t, struct buffer_head *, int);
-
-extern void xfs_ioend_init(void);
-extern void xfs_ioend_wait(struct xfs_inode *);
 
 extern void xfs_count_page_state(struct page *, int *, int *);
 

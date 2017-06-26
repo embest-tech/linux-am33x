@@ -216,8 +216,7 @@ void set_phy_rate(struct mvs_info *mvi, int phy_id, u8 rate)
 	mvs_write_port_vsr_data(mvi, phy_id, phy_cfg.v);
 }
 
-static void __devinit
-mvs_94xx_config_reg_from_hba(struct mvs_info *mvi, int phy_id)
+static void mvs_94xx_config_reg_from_hba(struct mvs_info *mvi, int phy_id)
 {
 	u32 temp;
 	temp = (u32)(*(u32 *)&mvi->hba_info_param.phy_tuning[phy_id]);
@@ -258,7 +257,7 @@ mvs_94xx_config_reg_from_hba(struct mvs_info *mvi, int phy_id)
 		mvi->hba_info_param.phy_rate[phy_id]);
 }
 
-static void __devinit mvs_94xx_enable_xmt(struct mvs_info *mvi, int phy_id)
+static void mvs_94xx_enable_xmt(struct mvs_info *mvi, int phy_id)
 {
 	void __iomem *regs = mvi->regs;
 	u32 tmp;
@@ -331,7 +330,7 @@ static void mvs_94xx_phy_enable(struct mvs_info *mvi, u32 phy_id)
 	mvs_write_port_vsr_data(mvi, phy_id, tmp & 0xfd7fffff);
 }
 
-static int __devinit mvs_94xx_init(struct mvs_info *mvi)
+static int mvs_94xx_init(struct mvs_info *mvi)
 {
 	void __iomem *regs = mvi->regs;
 	int i;
@@ -397,6 +396,16 @@ static int __devinit mvs_94xx_init(struct mvs_info *mvi)
 
 	/* init phys */
 	mvs_phy_hacks(mvi);
+
+	/* disable non data frame retry */
+	tmp = mvs_cr32(mvi, CMD_SAS_CTL1);
+	if ((revision == VANIR_A0_REV) ||
+		(revision == VANIR_B0_REV) ||
+		(revision == VANIR_C0_REV)) {
+		tmp &= ~0xffff;
+		tmp |= 0x007f;
+		mvs_cw32(mvi, CMD_SAS_CTL1, tmp);
+	}
 
 	/* set LED blink when IO*/
 	mw32(MVS_PA_VSR_ADDR, VSR_PHY_ACT_LED);
@@ -500,6 +509,27 @@ static int __devinit mvs_94xx_init(struct mvs_info *mvi)
 	tmp |= CINT_PHY_MASK;
 	mw32(MVS_INT_MASK, tmp);
 
+	tmp = mvs_cr32(mvi, CMD_LINK_TIMER);
+	tmp |= 0xFFFF0000;
+	mvs_cw32(mvi, CMD_LINK_TIMER, tmp);
+
+	/* tune STP performance */
+	tmp = 0x003F003F;
+	mvs_cw32(mvi, CMD_PL_TIMER, tmp);
+
+	/* This can improve expander large block size seq write performance */
+	tmp = mvs_cr32(mvi, CMD_PORT_LAYER_TIMER1);
+	tmp |= 0xFFFF007F;
+	mvs_cw32(mvi, CMD_PORT_LAYER_TIMER1, tmp);
+
+	/* change the connection open-close behavior (bit 9)
+	 * set bit8 to 1 for performance tuning */
+	tmp = mvs_cr32(mvi, CMD_SL_MODE0);
+	tmp |= 0x00000300;
+	/* set bit0 to 0 to enable retry for no_dest reject case */
+	tmp &= 0xFFFFFFFE;
+	mvs_cw32(mvi, CMD_SL_MODE0, tmp);
+
 	/* Enable SRS interrupt */
 	mw32(MVS_INT_MASK_SRS_0, 0xFFFF);
 
@@ -534,7 +564,7 @@ static void mvs_94xx_interrupt_enable(struct mvs_info *mvi)
 	u32 tmp;
 
 	tmp = mr32(MVS_GBL_CTL);
-	tmp |= (IRQ_SAS_A | IRQ_SAS_B);
+	tmp |= (MVS_IRQ_SAS_A | MVS_IRQ_SAS_B);
 	mw32(MVS_GBL_INT_STAT, tmp);
 	writel(tmp, regs + 0x0C);
 	writel(tmp, regs + 0x10);
@@ -550,7 +580,7 @@ static void mvs_94xx_interrupt_disable(struct mvs_info *mvi)
 
 	tmp = mr32(MVS_GBL_CTL);
 
-	tmp &= ~(IRQ_SAS_A | IRQ_SAS_B);
+	tmp &= ~(MVS_IRQ_SAS_A | MVS_IRQ_SAS_B);
 	mw32(MVS_GBL_INT_STAT, tmp);
 	writel(tmp, regs + 0x0C);
 	writel(tmp, regs + 0x10);
@@ -566,7 +596,7 @@ static u32 mvs_94xx_isr_status(struct mvs_info *mvi, int irq)
 	if (!(mvi->flags & MVF_FLAG_SOC)) {
 		stat = mr32(MVS_GBL_INT_STAT);
 
-		if (!(stat & (IRQ_SAS_A | IRQ_SAS_B)))
+		if (!(stat & (MVS_IRQ_SAS_A | MVS_IRQ_SAS_B)))
 			return 0;
 	}
 	return stat;
@@ -576,8 +606,8 @@ static irqreturn_t mvs_94xx_isr(struct mvs_info *mvi, int irq, u32 stat)
 {
 	void __iomem *regs = mvi->regs;
 
-	if (((stat & IRQ_SAS_A) && mvi->id == 0) ||
-			((stat & IRQ_SAS_B) && mvi->id == 1)) {
+	if (((stat & MVS_IRQ_SAS_A) && mvi->id == 0) ||
+			((stat & MVS_IRQ_SAS_B) && mvi->id == 1)) {
 		mw32_f(MVS_INT_STAT, CINT_DONE);
 
 		spin_lock(&mvi->lock);
@@ -822,6 +852,10 @@ static void mvs_94xx_fix_phy_info(struct mvs_info *mvi, int i,
 	} else {
 		phy->att_dev_info = PORT_DEV_STP_TRGT | 1;
 	}
+
+	/* enable spin up bit */
+	mvs_write_port_cfg_addr(mvi, i, PHYR_PHY_STAT);
+	mvs_write_port_cfg_data(mvi, i, 0x04);
 
 }
 

@@ -1,6 +1,4 @@
 /*
- *  drivers/s390/net/qeth_l3.h
- *
  *    Copyright IBM Corp. 2007
  *    Author(s): Utz Bacher <utz.bacher@de.ibm.com>,
  *		 Frank Pavlic <fpavlic@de.ibm.com>,
@@ -44,10 +42,6 @@ struct qeth_ipato_entry {
 };
 
 
-void qeth_l3_ipaddr4_to_string(const __u8 *, char *);
-int qeth_l3_string_to_ipaddr4(const char *, __u8 *);
-void qeth_l3_ipaddr6_to_string(const __u8 *, char *);
-int qeth_l3_string_to_ipaddr6(const char *, __u8 *);
 void qeth_l3_ipaddr_to_string(enum qeth_prot_versions, const __u8 *, char *);
 int qeth_l3_string_to_ipaddr(const char *, enum qeth_prot_versions, __u8 *);
 int qeth_l3_create_device_attributes(struct device *);
@@ -63,5 +57,9 @@ int qeth_l3_add_rxip(struct qeth_card *, enum qeth_prot_versions, const u8 *);
 void qeth_l3_del_rxip(struct qeth_card *card, enum qeth_prot_versions,
 			const u8 *);
 int qeth_l3_is_addr_covered_by_ipato(struct qeth_card *, struct qeth_ipaddr *);
+struct qeth_ipaddr *qeth_l3_get_addr_buffer(enum qeth_prot_versions);
+int qeth_l3_add_ip(struct qeth_card *, struct qeth_ipaddr *);
+int qeth_l3_delete_ip(struct qeth_card *, struct qeth_ipaddr *);
+void qeth_l3_set_ip_addr_list(struct qeth_card *);
 
 #endif /* __QETH_L3_H__ */

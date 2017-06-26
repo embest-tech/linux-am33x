@@ -4,8 +4,7 @@
  * This file contains generic high level protocol identifier and PR
  * handlers for TCM fabric modules
  *
- * Copyright (c) 2010 Rising Tide Systems, Inc.
- * Copyright (c) 2010 Linux-iSCSI.org
+ * (c) Copyright 2010-2013 Datera, Inc.
  *
  * Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
@@ -29,17 +28,15 @@
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/spinlock.h>
+#include <linux/export.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_device.h>
-#include <target/target_core_transport.h>
-#include <target/target_core_fabric_lib.h>
-#include <target/target_core_fabric_ops.h>
+#include <target/target_core_fabric.h>
 #include <target/target_core_configfs.h>
 
-#include "target_core_hba.h"
+#include "target_core_internal.h"
 #include "target_core_pr.h"
 
 /*
@@ -63,6 +60,7 @@ u32 sas_get_pr_transport_id(
 	unsigned char *buf)
 {
 	unsigned char *ptr;
+	int ret;
 
 	/*
 	 * Set PROTOCOL IDENTIFIER to 6h for SAS
@@ -74,7 +72,9 @@ u32 sas_get_pr_transport_id(
 	 */
 	ptr = &se_nacl->initiatorname[4]; /* Skip over 'naa. prefix */
 
-	hex2bin(&buf[4], ptr, 8);
+	ret = hex2bin(&buf[4], ptr, 8);
+	if (ret < 0)
+		pr_debug("sas transport_id: invalid hex string\n");
 
 	/*
 	 * The SAS Transport ID is a hardcoded 24-byte length
@@ -156,8 +156,9 @@ u32 fc_get_pr_transport_id(
 	unsigned char *buf)
 {
 	unsigned char *ptr;
-	int i;
+	int i, ret;
 	u32 off = 8;
+
 	/*
 	 * PROTOCOL IDENTIFIER is 0h for FCP-2
 	 *
@@ -174,7 +175,9 @@ u32 fc_get_pr_transport_id(
 			i++;
 			continue;
 		}
-		hex2bin(&buf[off++], &ptr[i], 1);
+		ret = hex2bin(&buf[off++], &ptr[i], 1);
+		if (ret < 0)
+			pr_debug("fc transport_id: invalid hex string\n");
 		i += 2;
 	}
 	/*
@@ -334,7 +337,7 @@ u32 iscsi_get_pr_transport_id_len(
 	 * 00b: iSCSI Initiator device TransportID format
 	 */
 	if (pr_reg->isid_present_at_reg) {
-		len += 5; /* For ",i,0x" ASCII seperator */
+		len += 5; /* For ",i,0x" ASCII separator */
 		len += 7; /* For iSCSI Initiator Session ID + Null terminator */
 		*format_code = 1;
 	} else
@@ -391,11 +394,11 @@ char *iscsi_parse_pr_out_transport_id(
 	 * If the caller wants the TransportID Length, we set that value for the
 	 * entire iSCSI Tarnsport ID now.
 	 */
-	 if (out_tid_len != NULL) {
-		add_len = ((buf[2] >> 8) & 0xff);
-		add_len |= (buf[3] & 0xff);
+	if (out_tid_len) {
+		/* The shift works thanks to integer promotion rules */
+		add_len = (buf[2] << 8) | buf[3];
 
-		tid_len = strlen((char *)&buf[4]);
+		tid_len = strlen(&buf[4]);
 		tid_len += 4; /* Add four bytes for iSCSI Transport ID header */
 		tid_len += 1; /* Add one byte for NULL terminator */
 		padding = ((-tid_len) & 3);
@@ -411,20 +414,20 @@ char *iscsi_parse_pr_out_transport_id(
 			*out_tid_len = (add_len + 4);
 	}
 	/*
-	 * Check for ',i,0x' seperator between iSCSI Name and iSCSI Initiator
+	 * Check for ',i,0x' separator between iSCSI Name and iSCSI Initiator
 	 * Session ID as defined in Table 390 - iSCSI initiator port TransportID
 	 * format.
 	 */
 	if (format_code == 0x40) {
-		p = strstr((char *)&buf[4], ",i,0x");
+		p = strstr(&buf[4], ",i,0x");
 		if (!p) {
-			pr_err("Unable to locate \",i,0x\" seperator"
+			pr_err("Unable to locate \",i,0x\" separator"
 				" for Initiator port identifier: %s\n",
-				(char *)&buf[4]);
+				&buf[4]);
 			return NULL;
 		}
 		*p = '\0'; /* Terminate iSCSI Name */
-		p += 5; /* Skip over ",i,0x" seperator */
+		p += 5; /* Skip over ",i,0x" separator */
 
 		*port_nexus_ptr = p;
 		/*

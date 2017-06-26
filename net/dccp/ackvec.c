@@ -12,6 +12,7 @@
 #include "dccp.h"
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/export.h>
 
 static struct kmem_cache *dccp_ackvec_slab;
 static struct kmem_cache *dccp_ackvec_record_slab;
@@ -217,7 +218,7 @@ static void dccp_ackvec_add_new(struct dccp_ackvec *av, u32 num_packets,
 		 * different underlying data structure.
 		 */
 		for (num_packets = num_cells = 1; lost_packets; ++num_cells) {
-			u8 len = min(lost_packets, (u32)DCCPAV_MAX_RUNLEN);
+			u8 len = min_t(u32, lost_packets, DCCPAV_MAX_RUNLEN);
 
 			av->av_buf_head = __ackvec_idx_sub(av->av_buf_head, 1);
 			av->av_buf[av->av_buf_head] = DCCPAV_NOT_RECEIVED | len;

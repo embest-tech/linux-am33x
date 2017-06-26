@@ -1,6 +1,7 @@
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <linux/interrupt.h>
 #include <linux/ide.h>
 #include <linux/bitops.h>
@@ -147,8 +148,8 @@ u8 ide_dump_status(ide_drive_t *drive, const char *msg, u8 stat)
 			printk(KERN_CONT "DataRequest ");
 		if (stat & ATA_CORR)
 			printk(KERN_CONT "CorrectedError ");
-		if (stat & ATA_IDX)
-			printk(KERN_CONT "Index ");
+		if (stat & ATA_SENSE)
+			printk(KERN_CONT "Sense ");
 		if (stat & ATA_ERR)
 			printk(KERN_CONT "Error ");
 	}

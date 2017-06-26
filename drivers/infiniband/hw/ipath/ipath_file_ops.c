@@ -35,12 +35,14 @@
 #include <linux/poll.h>
 #include <linux/cdev.h>
 #include <linux/swap.h>
+#include <linux/export.h>
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
 #include <linux/cpu.h>
+#include <linux/uio.h>
 #include <asm/pgtable.h>
 
 #include "ipath_kernel.h"
@@ -51,15 +53,19 @@ static int ipath_open(struct inode *, struct file *);
 static int ipath_close(struct inode *, struct file *);
 static ssize_t ipath_write(struct file *, const char __user *, size_t,
 			   loff_t *);
-static ssize_t ipath_writev(struct kiocb *, const struct iovec *,
-			    unsigned long , loff_t);
+static ssize_t ipath_write_iter(struct kiocb *, struct iov_iter *from);
 static unsigned int ipath_poll(struct file *, struct poll_table_struct *);
 static int ipath_mmap(struct file *, struct vm_area_struct *);
 
+/*
+ * This is really, really weird shit - write() and writev() here
+ * have completely unrelated semantics.  Sucky userland ABI,
+ * film at 11.
+ */
 static const struct file_operations ipath_file_ops = {
 	.owner = THIS_MODULE,
 	.write = ipath_write,
-	.aio_write = ipath_writev,
+	.write_iter = ipath_write_iter,
 	.open = ipath_open,
 	.release = ipath_close,
 	.poll = ipath_poll,
@@ -1224,7 +1230,7 @@ static int mmap_kvaddr(struct vm_area_struct *vma, u64 pgaddr,
 
 	vma->vm_pgoff = (unsigned long) addr >> PAGE_SHIFT;
 	vma->vm_ops = &ipath_file_vm_ops;
-	vma->vm_flags |= VM_RESERVED | VM_DONTEXPAND;
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
 	ret = 1;
 
 bail:
@@ -1863,9 +1869,9 @@ static int ipath_assign_port(struct file *fp,
 		goto done_chk_sdma;
 	}
 
-	i_minor = iminor(fp->f_path.dentry->d_inode) - IPATH_USER_MINOR_BASE;
+	i_minor = iminor(file_inode(fp)) - IPATH_USER_MINOR_BASE;
 	ipath_cdbg(VERBOSE, "open on dev %lx (minor %d)\n",
-		   (long)fp->f_path.dentry->d_inode->i_rdev, i_minor);
+		   (long)file_inode(fp)->i_rdev, i_minor);
 
 	if (i_minor)
 		ret = find_free_port(i_minor - 1, fp, uinfo);
@@ -2412,18 +2418,17 @@ bail:
 	return ret;
 }
 
-static ssize_t ipath_writev(struct kiocb *iocb, const struct iovec *iov,
-			    unsigned long dim, loff_t off)
+static ssize_t ipath_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *filp = iocb->ki_filp;
 	struct ipath_filedata *fp = filp->private_data;
 	struct ipath_portdata *pd = port_fp(filp);
 	struct ipath_user_sdma_queue *pq = fp->pq;
 
-	if (!dim)
+	if (!iter_is_iovec(from) || !from->nr_segs)
 		return -EINVAL;
 
-	return ipath_user_sdma_writev(pd->port_dd, pq, iov, dim);
+	return ipath_user_sdma_writev(pd->port_dd, pq, from->iov, from->nr_segs);
 }
 
 static struct class *ipath_class;

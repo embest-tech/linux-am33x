@@ -83,6 +83,8 @@ struct snd_ctl_elem_info32 {
 			u32 items;
 			u32 item;
 			char name[64];
+			u64 names_ptr;
+			u32 names_length;
 		} enumerated;
 		unsigned char reserved[128];
 	} value;
@@ -245,7 +247,7 @@ static int copy_ctl_value_from_user(struct snd_card *card,
 	} else {
 		size = get_elem_size(type, count);
 		if (size < 0) {
-			printk(KERN_ERR "snd_ioctl32_ctl_elem_value: unknown type %d\n", type);
+			dev_err(card->dev, "snd_ioctl32_ctl_elem_value: unknown type %d\n", type);
 			return -EINVAL;
 		}
 		if (copy_from_user(data->value.bytes.data,
@@ -372,6 +374,8 @@ static int snd_ctl_elem_add_compat(struct snd_ctl_file *file,
 				   &data32->value.enumerated,
 				   sizeof(data->value.enumerated)))
 			goto error;
+		data->value.enumerated.names_ptr =
+			(uintptr_t)compat_ptr(data->value.enumerated.names_ptr);
 		break;
 	default:
 		break;

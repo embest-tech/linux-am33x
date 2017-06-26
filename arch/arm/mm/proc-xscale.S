@@ -118,7 +118,7 @@ ENTRY(cpu_xscale_proc_init)
 	mrc	p15, 0, r1, c1, c0, 1
 	bic	r1, r1, #1
 	mcr	p15, 0, r1, c1, c0, 1
-	mov	pc, lr
+	ret	lr
 
 /*
  * cpu_xscale_proc_fin()
@@ -128,7 +128,7 @@ ENTRY(cpu_xscale_proc_fin)
 	bic	r0, r0, #0x1800			@ ...IZ...........
 	bic	r0, r0, #0x0006			@ .............CA.
 	mcr	p15, 0, r0, c1, c0, 0		@ disable caches
-	mov	pc, lr
+	ret	lr
 
 /*
  * cpu_xscale_reset(loc)
@@ -142,6 +142,7 @@ ENTRY(cpu_xscale_proc_fin)
  * Beware PXA270 erratum E7.
  */
 	.align	5
+	.pushsection	.idmap.text, "ax"
 ENTRY(cpu_xscale_reset)
 	mov	r1, #PSR_F_BIT|PSR_I_BIT|SVC_MODE
 	msr	cpsr_c, r1			@ reset CPSR
@@ -159,7 +160,9 @@ ENTRY(cpu_xscale_reset)
 	@ CAUTION: MMU turned off from this point. We count on the pipeline
 	@ already containing those two last instructions to survive.
 	mcr	p15, 0, ip, c8, c7, 0		@ invalidate I & D TLBs
-	mov	pc, r0
+	ret	r0
+ENDPROC(cpu_xscale_reset)
+	.popsection
 
 /*
  * cpu_xscale_do_idle()
@@ -176,7 +179,7 @@ ENTRY(cpu_xscale_reset)
 ENTRY(cpu_xscale_do_idle)
 	mov	r0, #1
 	mcr	p14, 0, r0, c7, c0, 0		@ Go to IDLE
-	mov	pc, lr
+	ret	lr
 
 /* ================================= CACHE ================================ */
 
@@ -188,7 +191,7 @@ ENTRY(cpu_xscale_do_idle)
 ENTRY(xscale_flush_icache_all)
 	mov	r0, #0
 	mcr	p15, 0, r0, c7, c5, 0		@ invalidate I cache
-	mov	pc, lr
+	ret	lr
 ENDPROC(xscale_flush_icache_all)
 
 /*
@@ -213,7 +216,7 @@ __flush_whole_cache:
 	tst	r2, #VM_EXEC
 	mcrne	p15, 0, ip, c7, c5, 0		@ Invalidate I cache & BTB
 	mcrne	p15, 0, ip, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	flush_user_cache_range(start, end, vm_flags)
@@ -242,7 +245,7 @@ ENTRY(xscale_flush_user_cache_range)
 	tst	r2, #VM_EXEC
 	mcrne	p15, 0, ip, c7, c5, 6		@ Invalidate BTB
 	mcrne	p15, 0, ip, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	coherent_kern_range(start, end)
@@ -266,7 +269,7 @@ ENTRY(xscale_coherent_kern_range)
 	mov	r0, #0
 	mcr	p15, 0, r0, c7, c5, 0		@ Invalidate I cache & BTB
 	mcr	p15, 0, r0, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	coherent_user_range(start, end)
@@ -288,7 +291,7 @@ ENTRY(xscale_coherent_user_range)
 	mov	r0, #0
 	mcr	p15, 0, r0, c7, c5, 6		@ Invalidate BTB
 	mcr	p15, 0, r0, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	flush_kern_dcache_area(void *addr, size_t size)
@@ -309,7 +312,7 @@ ENTRY(xscale_flush_kern_dcache_area)
 	mov	r0, #0
 	mcr	p15, 0, r0, c7, c5, 0		@ Invalidate I cache & BTB
 	mcr	p15, 0, r0, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	dma_inv_range(start, end)
@@ -333,7 +336,7 @@ xscale_dma_inv_range:
 	cmp	r0, r1
 	blo	1b
 	mcr	p15, 0, r0, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	dma_clean_range(start, end)
@@ -350,7 +353,7 @@ xscale_dma_clean_range:
 	cmp	r0, r1
 	blo	1b
 	mcr	p15, 0, r0, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	dma_flush_range(start, end)
@@ -368,7 +371,7 @@ ENTRY(xscale_dma_flush_range)
 	cmp	r0, r1
 	blo	1b
 	mcr	p15, 0, r0, c7, c10, 4		@ Drain Write (& Fill) Buffer
-	mov	pc, lr
+	ret	lr
 
 /*
  *	dma_map_area(start, size, dir)
@@ -404,8 +407,11 @@ ENDPROC(xscale_80200_A0_A1_dma_map_area)
  *	- dir	- DMA direction
  */
 ENTRY(xscale_dma_unmap_area)
-	mov	pc, lr
+	ret	lr
 ENDPROC(xscale_dma_unmap_area)
+
+	.globl	xscale_flush_kern_cache_louis
+	.equ	xscale_flush_kern_cache_louis, xscale_flush_kern_cache_all
 
 	@ define struct cpu_cache_fns (see <asm/cacheflush.h> and proc-macros.S)
 	define_cache_functions xscale
@@ -436,6 +442,7 @@ ENDPROC(xscale_dma_unmap_area)
 	a0_alias flush_icache_all
 	a0_alias flush_user_cache_all
 	a0_alias flush_kern_cache_all
+	a0_alias flush_kern_cache_louis
 	a0_alias flush_user_cache_range
 	a0_alias coherent_kern_range
 	a0_alias coherent_user_range
@@ -451,7 +458,7 @@ ENTRY(cpu_xscale_dcache_clean_area)
 	add	r0, r0, #CACHELINESIZE
 	subs	r1, r1, #CACHELINESIZE
 	bhi	1b
-	mov	pc, lr
+	ret	lr
 
 /* =============================== PageTable ============================== */
 
@@ -514,30 +521,29 @@ ENTRY(cpu_xscale_set_pte_ext)
 	orr	r2, r2, ip
 
 	xscale_set_pte_ext_epilogue
-	mov	pc, lr
+	ret	lr
 
 	.ltorg
 	.align
 
 .globl	cpu_xscale_suspend_size
-.equ	cpu_xscale_suspend_size, 4 * 7
-#ifdef CONFIG_PM_SLEEP
+.equ	cpu_xscale_suspend_size, 4 * 6
+#ifdef CONFIG_ARM_CPU_SUSPEND
 ENTRY(cpu_xscale_do_suspend)
-	stmfd	sp!, {r4 - r10, lr}
+	stmfd	sp!, {r4 - r9, lr}
 	mrc	p14, 0, r4, c6, c0, 0	@ clock configuration, for turbo mode
 	mrc	p15, 0, r5, c15, c1, 0	@ CP access reg
 	mrc	p15, 0, r6, c13, c0, 0	@ PID
 	mrc	p15, 0, r7, c3, c0, 0	@ domain ID
-	mrc	p15, 0, r8, c2, c0, 0	@ translation table base addr
-	mrc	p15, 0, r9, c1, c1, 0	@ auxiliary control reg
-	mrc	p15, 0, r10, c1, c0, 0	@ control reg
+	mrc	p15, 0, r8, c1, c0, 1	@ auxiliary control reg
+	mrc	p15, 0, r9, c1, c0, 0	@ control reg
 	bic	r4, r4, #2		@ clear frequency change bit
-	stmia	r0, {r4 - r10}		@ store cp regs
-	ldmfd	sp!, {r4 - r10, pc}
+	stmia	r0, {r4 - r9}		@ store cp regs
+	ldmfd	sp!, {r4 - r9, pc}
 ENDPROC(cpu_xscale_do_suspend)
 
 ENTRY(cpu_xscale_do_resume)
-	ldmia	r0, {r4 - r10}		@ load cp regs
+	ldmia	r0, {r4 - r9}		@ load cp regs
 	mov	ip, #0
 	mcr	p15, 0, ip, c8, c7, 0	@ invalidate I & D TLBs
 	mcr	p15, 0, ip, c7, c7, 0	@ invalidate I & D caches, BTB
@@ -545,18 +551,12 @@ ENTRY(cpu_xscale_do_resume)
 	mcr	p15, 0, r5, c15, c1, 0	@ CP access reg
 	mcr	p15, 0, r6, c13, c0, 0	@ PID
 	mcr	p15, 0, r7, c3, c0, 0	@ domain ID
-	mcr	p15, 0, r8, c2, c0, 0	@ translation table base addr
-	mcr	p15, 0, r9, c1, c1, 0	@ auxiliary control reg
-	mov	r0, r10			@ control register
-	mov	r2, r8, lsr #14		@ get TTB0 base
-	mov	r2, r2, lsl #14
-	ldr	r3, =PMD_TYPE_SECT | PMD_SECT_BUFFERABLE | \
-		     PMD_SECT_CACHEABLE | PMD_SECT_AP_WRITE
+	mcr	p15, 0, r1, c2, c0, 0	@ translation table base addr
+	mcr	p15, 0, r8, c1, c0, 1	@ auxiliary control reg
+	mov	r0, r9			@ control register
 	b	cpu_resume_mmu
 ENDPROC(cpu_xscale_do_resume)
 #endif
-
-	__CPUINIT
 
 	.type	__xscale_setup, #function
 __xscale_setup:
@@ -572,7 +572,7 @@ __xscale_setup:
 	mrc	p15, 0, r0, c1, c0, 0		@ get control register
 	bic	r0, r0, r5
 	orr	r0, r0, r6
-	mov	pc, lr
+	ret	lr
 	.size	__xscale_setup, . - __xscale_setup
 
 	/*
@@ -612,7 +612,7 @@ xscale_crval:
 
 	.align
 
-	.section ".proc.info.init", #alloc, #execinstr
+	.section ".proc.info.init", #alloc
 
 .macro xscale_proc_info name:req, cpu_val:req, cpu_mask:req, cpu_name:req, cache
 	.type	__\name\()_proc_info,#object
@@ -627,7 +627,7 @@ __\name\()_proc_info:
 	.long	PMD_TYPE_SECT | \
 		PMD_SECT_AP_WRITE | \
 		PMD_SECT_AP_READ
-	b	__xscale_setup
+	initfn	__xscale_setup, __\name\()_proc_info
 	.long	cpu_arch_name
 	.long	cpu_elf_name
 	.long	HWCAP_SWP|HWCAP_HALF|HWCAP_THUMB|HWCAP_FAST_MULT|HWCAP_EDSP
