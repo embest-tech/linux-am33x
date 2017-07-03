@@ -136,7 +136,7 @@ static spinlock_t reg_indoor_lock;
 static u32 reg_is_indoor_portid;
 
 /* Max number of consecutive attempts to communicate with CRDA  */
-#define REG_MAX_CRDA_TIMEOUTS 10
+#define REG_MAX_CRDA_TIMEOUTS 3
 
 static u32 reg_crda_timeouts;
 
@@ -552,7 +552,7 @@ static int call_crda(const char *alpha2)
 		pr_info("Calling CRDA for country: %c%c\n",
 			alpha2[0], alpha2[1]);
 	else
-		pr_info("Calling CRDA to update world regulatory domain\n");
+		pr_info_once("Calling CRDA to update world regulatory domain\n");
 
 	return kobject_uevent_env(&reg_pdev->dev.kobj, KOBJ_CHANGE, env);
 }

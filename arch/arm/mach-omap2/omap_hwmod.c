@@ -2705,6 +2705,15 @@ static int __init _setup(struct omap_hwmod *oh, void *data)
 	if (oh->_state != _HWMOD_STATE_INITIALIZED)
 		return 0;
 
+#if defined(CONFIG_SOC_AM33XX)
+	/*
+	 * SBC8600: don't disable gpio4, because it used for lcd backlight
+	 */
+	if (!strcmp(oh->name, "gpio4")) {
+		return 0;
+	}
+#endif
+
 	if (oh->parent_hwmod) {
 		int r;
 
