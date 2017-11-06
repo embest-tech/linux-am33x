@@ -1659,7 +1659,15 @@ static int do_setlink(const struct sk_buff *skb,
 	 * name provided implies that a name change has been
 	 * requested.
 	 */
+#ifdef CONFIG_SOC_AM33XX
+	/*
+	 * debian8.7 will change name from wlan<N> to wlx<ID>,
+	 * we don't need the feature.
+	 */
+	if (strncmp(dev->name, "wlan", 4) && ifm->ifi_index > 0 && ifname[0]) {
+#else
 	if (ifm->ifi_index > 0 && ifname[0]) {
+#endif
 		err = dev_change_name(dev, ifname);
 		if (err < 0)
 			goto errout;

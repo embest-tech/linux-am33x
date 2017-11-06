@@ -100,8 +100,8 @@
 
 	backlight: backlight {
 		compatible = "pwm-backlight";
-		pwms = <&ecap2 0 50000 0>;
-		brightness-levels = <0 51 53 56 62 75 101 152 255>;
+		pwms = <&ecap2 0 500000 0>;
+		brightness-levels = <0 5 10 15 25 35 50 100 255>;
 		default-brightness-level = <8>;
 	};
 
@@ -136,15 +136,15 @@
 				vsync-active = <0>;
 			};
 			800x480p60 {
-				clock-frequency = <36000000>;
+				clock-frequency = <35000000>;
 				hactive = <800>;
 				vactive = <480>;
-				hfront-porch = <1>;
-				hback-porch = <1>;
-				hsync-len = <48>;
-				vfront-porch = <12>;
-				vback-porch = <25>;
-				vsync-len = <5>;
+				hfront-porch = <210>;
+				hback-porch = <45>;
+				hsync-len = <1>;
+				vfront-porch = <132>;
+				vback-porch = <45>;
+				vsync-len = <1>;
 				hsync-active = <0>;
 				vsync-active = <0>;
 				de-active = <1>;
@@ -152,23 +152,21 @@
 			};
 
 			/*This is the timing for HDMI&VGA*/
-			/*
 			1024x768p60 {
 				clock-frequency = <80000000>;
 				hactive = <1024>;
 				vactive = <768>;
 				hfront-porch = <18>;
-				hback-porch = <297>;
+				hback-porch = <248>;
 				hsync-len = <53>;
 				vfront-porch = <3>;
-				vback-porch = <35>;
+				vback-porch = <29>;
 				vsync-len = <6>;
 				hsync-active = <0>;
 				vsync-active = <0>;
 				de-active = <1>;
 				pixelclk-active = <1>;
 			};
-			*/
 		};
 	};
 };
@@ -367,10 +365,10 @@
 
 	/* CAN0 pins: rxd & txd */        
 	can0_pins: pinmux_can0_pins {
-				pinctrl-single,pins = <
-						0x17C (PIN_INPUT_PULLUP | MUX_MODE2)        /* uart1_rtsn.can0_rxd */
-						0x178 (PIN_OUTPUT_PULLDOWN | MUX_MODE2)     /* uart1_ctsn.can0_txd */
-				>;
+		pinctrl-single,pins = <
+			0x17C (PIN_INPUT_PULLUP | MUX_MODE2)        /* uart1_rtsn.can0_rxd */
+			0x178 (PIN_OUTPUT_PULLDOWN | MUX_MODE2)     /* uart1_ctsn.can0_txd */
+		>;
 	};
 
 	spi0_pins: pinmux_spi0_pins {
@@ -482,22 +480,22 @@
 		gpmc,device-width = <1>;
 		gpmc,sync-clk-ps = <0>;
 		gpmc,cs-on-ns = <0>;
-		gpmc,cs-rd-off-ns = <44>;
-		gpmc,cs-wr-off-ns = <44>;
-		gpmc,adv-on-ns = <6>;
-		gpmc,adv-rd-off-ns = <34>;
-		gpmc,adv-wr-off-ns = <44>;
-		gpmc,we-on-ns = <0>;
-		gpmc,we-off-ns = <40>;
-		gpmc,oe-on-ns = <0>;
-		gpmc,oe-off-ns = <54>;
-		gpmc,access-ns = <64>;
-		gpmc,rd-cycle-ns = <82>;
-		gpmc,wr-cycle-ns = <82>;
+		gpmc,cs-rd-off-ns = <300>;
+		gpmc,cs-wr-off-ns = <300>;
+		gpmc,adv-on-ns = <0>;
+		gpmc,adv-rd-off-ns = <300>;
+		gpmc,adv-wr-off-ns = <300>;
+		gpmc,we-on-ns = <50>;
+		gpmc,we-off-ns = <220>;
+		gpmc,oe-on-ns = <70>;
+		gpmc,oe-off-ns = <240>;
+		gpmc,access-ns = <210>;
+		gpmc,rd-cycle-ns = <300>;
+		gpmc,wr-cycle-ns = <300>;
 		gpmc,bus-turnaround-ns = <0>;
-		gpmc,cycle2cycle-delay-ns = <0>;
+		gpmc,cycle2cycle-delay-ns = <150>;
 		gpmc,clk-activation-ns = <0>;
-		gpmc,wr-access-ns = <40>;
+		gpmc,wr-access-ns = <220>;
 		gpmc,wr-data-mux-bus-ns = <0>;
 		/* MTD partition table */
 		/* All SPL-* partitions are sized to minimal length
@@ -526,32 +524,48 @@
 			reg = <0x00080000 0x00040000>;
 		};
 		partition@5 {
-			label = "NAND.u-boot";
-			reg = <0x000C0000 0x00100000>;
+			label = "NAND.u-boot-spl-os.backup1";
+			reg = <0x000C0000 0x00040000>;
 		};
 		partition@6 {
-			label = "NAND.u-boot-env";
-			reg = <0x001C0000 0x00020000>;
+			label = "NAND.u-boot";
+			reg = <0x00100000 0x00100000>;
 		};
 		partition@7 {
-			label = "NAND.u-boot-env.backup1";
-			reg = <0x001E0000 0x00020000>;
+			label = "NAND.u-boot.backup1";
+			reg = <0x00200000 0x00100000>;
 		};
 		partition@8 {
-			label = "NAND.logo";
-			reg = <0x00200000 0x00400000>;
+			label = "NAND.u-boot-env";
+			reg = <0x00300000 0x00020000>;
 		};
 		partition@9 {
-			label = "NAND.kernel";
-			reg = <0x00600000 0x00800000>;
+			label = "NAND.u-boot-env.backup1";
+			reg = <0x00320000 0x00020000>;
 		};
 		partition@10 {
-			label = "NAND.file-system";
-			reg = <0x00E00000 0x19000000>;
+			label = "NAND.logo";
+			reg = <0x00340000 0x00400000>;
 		};
 		partition@11 {
+			label = "NAND.kernel";
+			reg = <0x00740000 0x00800000>;
+		};
+		partition@12 {
+			label = "NAND.kernel.backup1";
+			reg = <0x00F40000 0x00800000>;
+		};
+		partition@13 {
+			label = "NAND.ramdisk";
+			reg = <0x01740000 0x01000000>;
+		};
+		partition@14 {
+			label = "NAND.file-system";
+			reg = <0x02740000 0x19000000>;
+		};
+		partition@15 {
 			label = "NAND.user";
-			reg = <0x19E00000 0x06200000>;
+			reg = <0x1B740000 0x048C0000>;
 		};
 	};
 };
@@ -634,7 +648,7 @@
 		ti,wires = <4>;
 		ti,x-plate-resistance = <200>;
 		ti,coordinate-readouts = <5>;
-		ti,wire-config = <0x10 0x01 0x22 0x33>;
+		ti,wire-config = <0x00 0x11 0x22 0x33>;
 		ti,charge-delay = <0xf200>;
 	};
 

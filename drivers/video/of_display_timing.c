@@ -259,6 +259,8 @@ struct display_timings *of_get_display_timings(struct device_node *np)
 		disp->native_mode = match_native_mode(disp, 480, 272);
 	else if (!strncmp(dispmode, "7.0inch_LCD", 12))
 		disp->native_mode = match_native_mode(disp, 800, 480);
+	else if (!strncmp(dispmode, "VGA", 4))
+		disp->native_mode = match_native_mode(disp, 1024, 768);
 #endif
 	/*
 	 * native_mode points to the device_node returned by of_parse_phandle

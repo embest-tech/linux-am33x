@@ -26,6 +26,7 @@
 #endif
 
 #include <asm/cputype.h>
+#include <asm/system_info.h>
 
 #include "common.h"
 
@@ -33,6 +34,8 @@
 
 #include "soc.h"
 #include "control.h"
+
+#define MAC_ID0_reg						0x630
 
 #define OMAP4_SILICON_TYPE_STANDARD		0x01
 #define OMAP4_SILICON_TYPE_PERFORMANCE		0x02
@@ -762,6 +765,17 @@ void __init omap_soc_device_init(void)
 	soc_dev_attr->machine  = soc_name;
 	soc_dev_attr->family   = omap_get_family();
 	soc_dev_attr->revision = soc_rev;
+	if (soc_is_am33xx() || soc_is_am335x()) {
+		void __iomem *p = ioremap(AM33XX_SCM_BASE + MAC_ID0_reg, 4 * sizeof(int));
+		if (p != NULL) {
+			soc_dev_attr->soc_id = kasprintf(GFP_KERNEL, "%08X%04X%08X%04X",
+				readl(p + 4), readl(p),
+				readl(p + 12), readl(p + 8));
+			iounmap(p);
+
+			system_serial = soc_dev_attr->soc_id;
+		}
+	}
 
 	soc_dev = soc_device_register(soc_dev_attr);
 	if (IS_ERR(soc_dev)) {
