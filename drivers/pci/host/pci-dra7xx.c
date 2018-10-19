@@ -12,20 +12,18 @@
 
 #include <linux/delay.h>
 #include <linux/err.h>
-#include <linux/gpio.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of_gpio.h>
 #include <linux/pci.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/resource.h>
 #include <linux/types.h>
-
-#include <linux/platform_data/pci-dra7xx.h>
 
 #include "pcie-designware.h"
 
@@ -64,6 +62,7 @@
 
 #define	PCIECTRL_DRA7XX_CONF_PHY_CS			0x010C
 #define	LINK_UP						BIT(16)
+#define	DRA7XX_CPU_TO_BUS_ADDR				0x0FFFFFFF
 
 struct dra7xx_pcie {
 	void __iomem		*base;
@@ -107,9 +106,9 @@ static int dra7xx_pcie_link_up(struct pcie_port *pp)
 
 static int dra7xx_pcie_establish_link(struct pcie_port *pp)
 {
-	u32 reg;
-	unsigned int retries = 1000;
 	struct dra7xx_pcie *dra7xx = to_dra7xx_pcie(pp);
+	u32 reg;
+	unsigned int retries;
 
 	if (dw_pcie_link_up(pp)) {
 		dev_err(pp->dev, "link is already up\n");
@@ -120,19 +119,14 @@ static int dra7xx_pcie_establish_link(struct pcie_port *pp)
 	reg |= LTSSM_EN;
 	dra7xx_pcie_writel(dra7xx, PCIECTRL_DRA7XX_CONF_DEVICE_CMD, reg);
 
-	while (retries--) {
-		reg = dra7xx_pcie_readl(dra7xx,	PCIECTRL_DRA7XX_CONF_PHY_CS);
-		if (reg & LINK_UP)
-			break;
+	for (retries = 0; retries < 1000; retries++) {
+		if (dw_pcie_link_up(pp))
+			return 0;
 		usleep_range(10, 20);
 	}
 
-	if (retries == 0) {
-		dev_err(pp->dev, "link is not up\n");
-		return -ETIMEDOUT;
-	}
-
-	return 0;
+	dev_err(pp->dev, "link is not up\n");
+	return -EINVAL;
 }
 
 static void dra7xx_pcie_enable_interrupts(struct pcie_port *pp)
@@ -158,6 +152,12 @@ static void dra7xx_pcie_enable_interrupts(struct pcie_port *pp)
 static void dra7xx_pcie_host_init(struct pcie_port *pp)
 {
 	dw_pcie_setup_rc(pp);
+
+	pp->io_base &= DRA7XX_CPU_TO_BUS_ADDR;
+	pp->mem_base &= DRA7XX_CPU_TO_BUS_ADDR;
+	pp->cfg0_base &= DRA7XX_CPU_TO_BUS_ADDR;
+	pp->cfg1_base &= DRA7XX_CPU_TO_BUS_ADDR;
+
 	dra7xx_pcie_establish_link(pp);
 	if (IS_ENABLED(CONFIG_PCI_MSI))
 		dw_pcie_msi_init(pp);
@@ -174,7 +174,6 @@ static int dra7xx_pcie_intx_map(struct irq_domain *domain, unsigned int irq,
 {
 	irq_set_chip_and_handler(irq, &dummy_irq_chip, handle_simple_irq);
 	irq_set_chip_data(irq, domain->host_data);
-	set_irq_flags(irq, IRQF_VALID);
 
 	return 0;
 }
@@ -303,7 +302,8 @@ static int __init dra7xx_add_pcie_port(struct dra7xx_pcie *dra7xx,
 	}
 
 	ret = devm_request_irq(&pdev->dev, pp->irq,
-			       dra7xx_pcie_msi_irq_handler, IRQF_SHARED,
+			       dra7xx_pcie_msi_irq_handler,
+			       IRQF_SHARED | IRQF_NO_THREAD,
 			       "dra7-pcie-msi",	pp);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request irq\n");
@@ -330,32 +330,6 @@ static int __init dra7xx_add_pcie_port(struct dra7xx_pcie *dra7xx,
 	return 0;
 }
 
-static int dra7xx_pcie_reset(struct platform_device *pdev)
-{
-	int ret;
-	struct device *dev = &pdev->dev;
-	struct pci_dra7xx_platform_data *pdata = pdev->dev.platform_data;
-
-	if (!(pdata && pdata->deassert_reset && pdata->assert_reset)) {
-		dev_err(dev, "platform data for reset not found!\n");
-		return -EINVAL;
-	}
-
-	ret = pdata->assert_reset(pdev, pdata->reset_name);
-	if (ret) {
-		dev_err(dev, "assert_reset failed: %d\n", ret);
-		return ret;
-	}
-
-	ret = pdata->deassert_reset(pdev, pdata->reset_name);
-	if (ret) {
-		dev_err(dev, "deassert_reset failed: %d\n", ret);
-		return ret;
-	}
-
-	return 0;
-}
-
 static int __init dra7xx_pcie_probe(struct platform_device *pdev)
 {
 	u32 reg;
@@ -366,15 +340,13 @@ static int __init dra7xx_pcie_probe(struct platform_device *pdev)
 	struct phy **phy;
 	void __iomem *base;
 	struct resource *res;
-	struct gpio_desc *reset;
 	struct dra7xx_pcie *dra7xx;
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
 	char name[10];
-
-	ret = dra7xx_pcie_reset(pdev);
-	if (ret)
-		return ret;
+	int gpio_sel;
+	enum of_gpio_flags flags;
+	unsigned long gpio_flags;
 
 	dra7xx = devm_kzalloc(dev, sizeof(*dra7xx), GFP_KERNEL);
 	if (!dra7xx)
@@ -433,15 +405,23 @@ static int __init dra7xx_pcie_probe(struct platform_device *pdev)
 	pm_runtime_enable(dev);
 	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
-		pm_runtime_put_noidle(dev);
 		dev_err(dev, "pm_runtime_get_sync failed\n");
 		goto err_get_sync;
 	}
 
-	reset = devm_gpiod_get_optional(dev, "pcie-reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(reset)) {
-		ret = PTR_ERR(reset);
-		dev_err(&pdev->dev, "gpio request failed, ret %d\n", ret);
+	gpio_sel = of_get_gpio_flags(dev->of_node, 0, &flags);
+	if (gpio_is_valid(gpio_sel)) {
+		gpio_flags = (flags & OF_GPIO_ACTIVE_LOW) ?
+				GPIOF_OUT_INIT_LOW : GPIOF_OUT_INIT_HIGH;
+		ret = devm_gpio_request_one(dev, gpio_sel, gpio_flags,
+					    "pcie_reset");
+		if (ret) {
+			dev_err(&pdev->dev, "gpio%d request failed, ret %d\n",
+				gpio_sel, ret);
+			goto err_gpio;
+		}
+	} else if (gpio_sel == -EPROBE_DEFER) {
+		ret = -EPROBE_DEFER;
 		goto err_gpio;
 	}
 

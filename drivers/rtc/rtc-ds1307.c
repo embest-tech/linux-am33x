@@ -15,14 +15,10 @@
 #include <linux/i2c.h>
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
-#include <linux/of_irq.h>
-#include <linux/pm_wakeirq.h>
 #include <linux/rtc/ds1307.h>
 #include <linux/rtc.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/of.h>
 
 /*
  * We can't determine type by probing, but if we expect pre-Linux code
@@ -36,7 +32,6 @@ enum ds_type {
 	ds_1338,
 	ds_1339,
 	ds_1340,
-	ds_1341,
 	ds_1388,
 	ds_3231,
 	m41t00,
@@ -78,9 +73,8 @@ enum ds_type {
 #	define DS1307_BIT_RS0		0x01
 #define DS1337_REG_CONTROL	0x0e
 #	define DS1337_BIT_nEOSC		0x80
-#	define DS3231_BIT_BBSQW		0x40 /* same as BBSQI */
 #	define DS1339_BIT_BBSQI		0x20
-#	define DS1341_BIT_EGFIL		0x20
+#	define DS3231_BIT_BBSQW		0x40 /* same as BBSQI */
 #	define DS1337_BIT_RS2		0x10
 #	define DS1337_BIT_RS1		0x08
 #	define DS1337_BIT_INTCN		0x04
@@ -95,8 +89,6 @@ enum ds_type {
 #	define DS1340_BIT_OSF		0x80
 #define DS1337_REG_STATUS	0x0f
 #	define DS1337_BIT_OSF		0x80
-#	define DS1341_BIT_DOSF		0x40
-#	define DS1341_BIT_ECLK		0x04
 #	define DS1337_BIT_A2I		0x02
 #	define DS1337_BIT_A1I		0x01
 #define DS1339_REG_ALARM1_SECS	0x07
@@ -122,7 +114,6 @@ struct ds1307 {
 #define HAS_ALARM	1		/* bit 1 == irq claimed */
 	struct i2c_client	*client;
 	struct rtc_device	*rtc;
-	int			wakeirq;
 	s32 (*read_block_data)(const struct i2c_client *client, u8 command,
 			       u8 length, u8 *values);
 	s32 (*write_block_data)(const struct i2c_client *client, u8 command,
@@ -182,7 +173,6 @@ static const struct i2c_device_id ds1307_id[] = {
 	{ "ds1339", ds_1339 },
 	{ "ds1388", ds_1388 },
 	{ "ds1340", ds_1340 },
-	{ "ds1341", ds_1341 },
 	{ "ds3231", ds_3231 },
 	{ "m41t00", m41t00 },
 	{ "mcp7940x", mcp794xx },
@@ -384,7 +374,6 @@ static int ds1307_get_time(struct device *dev, struct rtc_time *t)
 
 	/* assume 20YY not 19YY, and ignore DS1337_BIT_CENTURY */
 	t->tm_year = bcd2bin(ds1307->regs[DS1307_REG_YEAR]) + 100;
-	if( t->tm_year > 150 ) t->tm_year = 100;
 
 	dev_dbg(dev, "%s secs=%d, mins=%d, "
 		"hours=%d, mday=%d, mon=%d, year=%d, wday=%d\n",
@@ -424,7 +413,6 @@ static int ds1307_set_time(struct device *dev, struct rtc_time *t)
 	case ds_1337:
 	case ds_1339:
 	case ds_3231:
-	case ds_1341:
 		buf[DS1307_REG_MONTH] |= DS1337_BIT_CENTURY;
 		break;
 	case ds_1340:
@@ -1035,17 +1023,6 @@ static int ds1307_probe(struct i2c_client *client,
 			want_irq = true;
 		}
 		break;
-	case ds_1341: /* low power settings */
-		tmp = i2c_smbus_read_byte_data(client, DS1337_REG_CONTROL );
-		tmp |= DS1337_BIT_INTCN;
-		tmp &= ~DS1341_BIT_EGFIL;
-		i2c_smbus_write_byte_data(client, DS1337_REG_CONTROL, tmp);
-
-		tmp = i2c_smbus_read_byte_data(client, DS1337_REG_STATUS);
-		tmp |= DS1341_BIT_DOSF;
-		tmp &= ~DS1341_BIT_ECLK;
-		i2c_smbus_write_byte_data(client, DS1337_REG_STATUS, tmp);
-		break;
 	default:
 		break;
 	}
@@ -1157,7 +1134,10 @@ read_rtc:
 				bin2bcd(tmp));
 	}
 
-	device_set_wakeup_capable(&client->dev, want_irq);
+	if (want_irq) {
+		device_set_wakeup_capable(&client->dev, true);
+		set_bit(HAS_ALARM, &ds1307->flags);
+	}
 	ds1307->rtc = devm_rtc_device_register(&client->dev, client->name,
 				rtc_ops, THIS_MODULE);
 	if (IS_ERR(ds1307->rtc)) {
@@ -1165,43 +1145,19 @@ read_rtc:
 	}
 
 	if (want_irq) {
-		struct device_node *node = client->dev.of_node;
-
 		err = devm_request_threaded_irq(&client->dev,
 						client->irq, NULL, irq_handler,
 						IRQF_SHARED | IRQF_ONESHOT,
 						ds1307->rtc->name, client);
 		if (err) {
 			client->irq = 0;
+			device_set_wakeup_capable(&client->dev, false);
+			clear_bit(HAS_ALARM, &ds1307->flags);
 			dev_err(&client->dev, "unable to request IRQ!\n");
-			goto no_irq;
-		}
-
-		set_bit(HAS_ALARM, &ds1307->flags);
-		dev_dbg(&client->dev, "got IRQ %d\n", client->irq);
-
-		/* Currently supported by OF code only! */
-		if (!node)
-			goto no_irq;
-
-		err = of_irq_get(node, 1);
-		if (err <= 0) {
-			if (err == -EPROBE_DEFER)
-				goto exit;
-			goto no_irq;
-		}
-		ds1307->wakeirq = err;
-
-		err = dev_pm_set_dedicated_wake_irq(&client->dev,
-						    ds1307->wakeirq);
-		if (err) {
-			dev_err(&client->dev, "unable to setup wakeIRQ %d!\n",
-				err);
-			goto exit;
-		}
+		} else
+			dev_dbg(&client->dev, "got IRQ %d\n", client->irq);
 	}
 
-no_irq:
 	if (chip->nvram_size) {
 
 		ds1307->nvram = devm_kzalloc(&client->dev,
@@ -1245,40 +1201,15 @@ static int ds1307_remove(struct i2c_client *client)
 {
 	struct ds1307 *ds1307 = i2c_get_clientdata(client);
 
-	if (ds1307->wakeirq)
-		dev_pm_clear_wake_irq(&client->dev);
-
 	if (test_and_clear_bit(HAS_NVRAM, &ds1307->flags))
 		sysfs_remove_bin_file(&client->dev.kobj, ds1307->nvram);
 
 	return 0;
 }
 
-#ifdef CONFIG_OF
-static const struct of_device_id ds1307_driver_dt_ids[] = {
-	/* driver_data are passed through ds1307_id */
-	{ .compatible = "maxim,ds1307" },
-	{ .compatible = "maxim,ds1337" },
-	{ .compatible = "maxim,ds1338" },
-	{ .compatible = "maxim,ds1339" },
-	{ .compatible = "maxim,ds1388" },
-	{ .compatible = "maxim,ds1340" },
-	{ .compatible = "maxim,ds3231" },
-	{ .compatible = "st,m41t00" },
-	{ .compatible = "microchip,mcp7940x" },
-	{ .compatible = "microchip,mcp7941x" },
-	{ .compatible = "pericom,pt7c4338" },
-	{ .compatible = "epson,rx8025" },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, ds1307_driver_dt_ids);
-#endif
-
 static struct i2c_driver ds1307_driver = {
 	.driver = {
 		.name	= "rtc-ds1307",
-		.owner	= THIS_MODULE,
-		.of_match_table	= of_match_ptr(ds1307_driver_dt_ids),
 	},
 	.probe		= ds1307_probe,
 	.remove		= ds1307_remove,

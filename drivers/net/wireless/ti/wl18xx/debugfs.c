@@ -334,7 +334,6 @@ static ssize_t dynamic_fw_traces_read(struct file *file,
 					size_t count, loff_t *ppos)
 {
 	struct wl1271 *wl = file->private_data;
-
 	return wl1271_format_buffer(userbuf, count, ppos,
 				    "%d\n", wl->dynamic_fw_traces);
 }

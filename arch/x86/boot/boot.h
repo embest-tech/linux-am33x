@@ -16,14 +16,13 @@
 #ifndef BOOT_BOOT_H
 #define BOOT_BOOT_H
 
-#define STACK_SIZE	512	/* Minimum number of bytes for stack */
+#define STACK_SIZE	1024	/* Minimum number of bytes for stack */
 
 #ifndef __ASSEMBLY__
 
 #include <stdarg.h>
 #include <linux/types.h>
 #include <linux/edd.h>
-#include <asm/boot.h>
 #include <asm/setup.h>
 #include "bitops.h"
 #include "ctype.h"
@@ -306,9 +305,6 @@ void query_edd(void);
 
 /* header.S */
 void __attribute__((noreturn)) die(void);
-
-/* mca.c */
-int query_mca(void);
 
 /* memory.c */
 int detect_memory(void);

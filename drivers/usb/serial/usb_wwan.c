@@ -36,6 +36,43 @@
 #include <linux/serial.h>
 #include "usb-wwan.h"
 
+#define HW_bcdUSB 0x0110
+#define HUAWEI_VENDOR_ID 0x12d1
+
+/*
+ * Generate DTR/RTS signals on the port using the SET_CONTROL_LINE_STATE request
+ * in CDC ACM.
+ */
+static int usb_wwan_send_setup(struct usb_serial_port *port)
+{
+	struct usb_serial *serial = port->serial;
+	struct usb_wwan_port_private *portdata;
+	int val = 0;
+	int ifnum;
+	int res;
+
+	portdata = usb_get_serial_port_data(port);
+
+	if (portdata->dtr_state)
+		val |= 0x01;
+	if (portdata->rts_state)
+		val |= 0x02;
+
+	ifnum = serial->interface->cur_altsetting->desc.bInterfaceNumber;
+
+	res = usb_autopm_get_interface(serial->interface);
+	if (res)
+		return res;
+
+	res = usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
+				0x22, 0x21, val, ifnum, NULL, 0,
+				USB_CTRL_SET_TIMEOUT);
+
+	usb_autopm_put_interface(port->serial->interface);
+
+	return res;
+}
+
 void usb_wwan_dtr_rts(struct usb_serial_port *port, int on)
 {
 	struct usb_wwan_port_private *portdata;
@@ -43,7 +80,7 @@ void usb_wwan_dtr_rts(struct usb_serial_port *port, int on)
 
 	intfdata = usb_get_serial_data(port->serial);
 
-	if (!intfdata->send_setup)
+	if (!intfdata->use_send_setup)
 		return;
 
 	portdata = usb_get_serial_port_data(port);
@@ -51,7 +88,7 @@ void usb_wwan_dtr_rts(struct usb_serial_port *port, int on)
 	portdata->rts_state = on;
 	portdata->dtr_state = on;
 
-	intfdata->send_setup(port);
+	usb_wwan_send_setup(port);
 }
 EXPORT_SYMBOL(usb_wwan_dtr_rts);
 
@@ -84,7 +121,7 @@ int usb_wwan_tiocmset(struct tty_struct *tty,
 	portdata = usb_get_serial_port_data(port);
 	intfdata = usb_get_serial_data(port->serial);
 
-	if (!intfdata->send_setup)
+	if (!intfdata->use_send_setup)
 		return -EINVAL;
 
 	/* FIXME: what locks portdata fields ? */
@@ -97,7 +134,7 @@ int usb_wwan_tiocmset(struct tty_struct *tty,
 		portdata->rts_state = 0;
 	if (clear & TIOCM_DTR)
 		portdata->dtr_state = 0;
-	return intfdata->send_setup(port);
+	return usb_wwan_send_setup(port);
 }
 EXPORT_SYMBOL(usb_wwan_tiocmset);
 
@@ -186,6 +223,7 @@ int usb_wwan_write(struct tty_struct *tty, struct usb_serial_port *port,
 	int i;
 	int left, todo;
 	struct urb *this_urb = NULL;	/* spurious */
+	struct usb_host_endpoint *ep = NULL;
 	int err;
 	unsigned long flags;
 
@@ -221,6 +259,15 @@ int usb_wwan_write(struct tty_struct *tty, struct usb_serial_port *port,
 		/* send the data */
 		memcpy(this_urb->transfer_buffer, buf, todo);
 		this_urb->transfer_buffer_length = todo;
+
+		if ((HUAWEI_VENDOR_ID == port->serial->dev->descriptor.idVendor)
+			&& (HW_bcdUSB != port->serial->dev->descriptor.bcdUSB)) {
+			ep = usb_pipe_endpoint(this_urb->dev, this_urb->pipe);
+			if (ep && (0 != this_urb->transfer_buffer_length)
+				&& (0 == this_urb->transfer_buffer_length % ep->desc.wMaxPacketSize)) {
+				this_urb->transfer_flags |= URB_ZERO_PACKET;
+			}
+		}
 
 		spin_lock_irqsave(&intfdata->susp_lock, flags);
 		if (intfdata->suspended) {
@@ -282,7 +329,7 @@ static void usb_wwan_indat_callback(struct urb *urb)
 	/* Resubmit urb so we continue receiving */
 	err = usb_submit_urb(urb, GFP_ATOMIC);
 	if (err) {
-		if (err != -EPERM) {
+		if (err != -EPERM && err != -ENODEV) {
 			dev_err(dev, "%s: resubmit read urb failed. (%d)\n",
 				__func__, err);
 			/* busy also in error unless we are killed */

@@ -21,6 +21,7 @@
  * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/mutex.h>
@@ -36,9 +37,8 @@ static int otg_set_protocol(struct otg_fsm *fsm, int protocol)
 	int ret = 0;
 
 	if (fsm->protocol != protocol) {
-		dev_vdbg(fsm->dev,
-			 "Changing role fsm->protocol= %d; new protocol= %d\n",
-			 fsm->protocol, protocol);
+		VDBG("Changing role fsm->protocol= %d; new protocol= %d\n",
+			fsm->protocol, protocol);
 		/* stop old protocol */
 		if (fsm->protocol == PROTO_HOST)
 			ret = otg_start_host(fsm, 0);
@@ -61,6 +61,8 @@ static int otg_set_protocol(struct otg_fsm *fsm, int protocol)
 
 	return 0;
 }
+
+static int state_changed;
 
 /* Called when leaving a state.  Do state clean up jobs here */
 static void otg_leave_state(struct otg_fsm *fsm, enum usb_otg_state old_state)
@@ -122,9 +124,10 @@ static void otg_leave_state(struct otg_fsm *fsm, enum usb_otg_state old_state)
 /* Called when entering a state */
 static int otg_set_state(struct otg_fsm *fsm, enum usb_otg_state new_state)
 {
+	state_changed = 1;
 	if (fsm->otg->state == new_state)
 		return 0;
-	dev_vdbg(fsm->dev, "Set state: %s\n", usb_otg_state_string(new_state));
+	VDBG("Set state: %s\n", usb_otg_state_string(new_state));
 	otg_leave_state(fsm, fsm->otg->state);
 	switch (new_state) {
 	case OTG_STATE_B_IDLE:
@@ -165,10 +168,8 @@ static int otg_set_state(struct otg_fsm *fsm, enum usb_otg_state new_state)
 		otg_loc_conn(fsm, 0);
 		otg_loc_sof(fsm, 1);
 		otg_set_protocol(fsm, PROTO_HOST);
-		if (fsm->ops->start_enum) {
-			fsm->ops->start_enum(fsm->otg->host,
-					     fsm->otg->host->otg_port);
-		}
+		usb_bus_start_enum(fsm->otg->host,
+				fsm->otg->host->otg_port);
 		break;
 	case OTG_STATE_A_IDLE:
 		otg_drv_vbus(fsm, 0);
@@ -237,7 +238,6 @@ static int otg_set_state(struct otg_fsm *fsm, enum usb_otg_state new_state)
 	}
 
 	fsm->otg->state = new_state;
-	fsm->state_changed = 1;
 	return 0;
 }
 
@@ -249,12 +249,12 @@ int otg_statemachine(struct otg_fsm *fsm)
 	mutex_lock(&fsm->lock);
 
 	state = fsm->otg->state;
-	fsm->state_changed = 0;
+	state_changed = 0;
 	/* State machine state change judgement */
 
 	switch (state) {
 	case OTG_STATE_UNDEFINED:
-		dev_vdbg(fsm->dev, "fsm->id = %d\n", fsm->id);
+		VDBG("fsm->id = %d\n", fsm->id);
 		if (fsm->id)
 			otg_set_state(fsm, OTG_STATE_B_IDLE);
 		else
@@ -362,8 +362,8 @@ int otg_statemachine(struct otg_fsm *fsm)
 	}
 	mutex_unlock(&fsm->lock);
 
-	dev_vdbg(fsm->dev, "quit statemachine, changed = %d\n",
-		 fsm->state_changed);
-	return fsm->state_changed;
+	VDBG("quit statemachine, changed = %d\n", state_changed);
+	return state_changed;
 }
 EXPORT_SYMBOL_GPL(otg_statemachine);
+MODULE_LICENSE("GPL");

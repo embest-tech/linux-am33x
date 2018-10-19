@@ -122,18 +122,8 @@ static void *omap_gem_dmabuf_kmap(struct dma_buf *buffer,
 {
 	struct drm_gem_object *obj = buffer->priv;
 	struct page **pages;
-	dma_addr_t dma_addr;
 	omap_gem_get_pages(obj, &pages, false);
 	omap_gem_cpu_sync(obj, page_num);
-
-	/*
-	 * invalidate/flush the cache for this page deliberately.
-	 * XXX: revisit this, to find the proper place for invoking these calls.
-	 */
-	dma_addr = dma_map_page(obj->dev->dev, pages[page_num], 0, PAGE_SIZE,
-				DMA_BIDIRECTIONAL);
-	dma_unmap_page(obj->dev->dev, dma_addr, PAGE_SIZE, DMA_BIDIRECTIONAL);
-
 	return kmap(pages[page_num]);
 }
 
@@ -142,32 +132,20 @@ static void omap_gem_dmabuf_kunmap(struct dma_buf *buffer,
 {
 	struct drm_gem_object *obj = buffer->priv;
 	struct page **pages;
-	dma_addr_t dma_addr;
 	omap_gem_get_pages(obj, &pages, false);
 	kunmap(pages[page_num]);
-
-	/*
-	 * invalidate/flush the cache for this page deliberately.
-	 * XXX: revisit this, to find the proper place for invoking these calls.
-	 */
-	dma_addr = dma_map_page(obj->dev->dev, pages[page_num], 0, PAGE_SIZE,
-				DMA_BIDIRECTIONAL);
-	dma_unmap_page(obj->dev->dev, dma_addr, PAGE_SIZE, DMA_BIDIRECTIONAL);
 }
 
 static int omap_gem_dmabuf_mmap(struct dma_buf *buffer,
 		struct vm_area_struct *vma)
 {
 	struct drm_gem_object *obj = buffer->priv;
-	struct drm_device *dev = obj->dev;
 	int ret = 0;
 
 	if (WARN_ON(!obj->filp))
 		return -EINVAL;
 
-	mutex_lock(&dev->struct_mutex);
 	ret = drm_gem_mmap_obj(obj, omap_gem_mmap_size(obj), vma);
-	mutex_unlock(&dev->struct_mutex);
 	if (ret < 0)
 		return ret;
 

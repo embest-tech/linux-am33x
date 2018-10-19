@@ -25,6 +25,7 @@
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/pci.h>
 #include <linux/rwsem.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -295,6 +296,34 @@ static void vfio_group_put(struct vfio_group *group)
 	kref_put_mutex(&group->kref, vfio_group_release, &vfio.group_lock);
 }
 
+struct vfio_group_put_work {
+	struct work_struct work;
+	struct vfio_group *group;
+};
+
+static void vfio_group_put_bg(struct work_struct *work)
+{
+	struct vfio_group_put_work *do_work;
+
+	do_work = container_of(work, struct vfio_group_put_work, work);
+
+	vfio_group_put(do_work->group);
+	kfree(do_work);
+}
+
+static void vfio_group_schedule_put(struct vfio_group *group)
+{
+	struct vfio_group_put_work *do_work;
+
+	do_work = kmalloc(sizeof(*do_work), GFP_KERNEL);
+	if (WARN_ON(!do_work))
+		return;
+
+	INIT_WORK(&do_work->work, vfio_group_put_bg);
+	do_work->group = group;
+	schedule_work(&do_work->work);
+}
+
 /* Assume group_lock or group reference is held */
 static void vfio_group_get(struct vfio_group *group)
 {
@@ -438,15 +467,32 @@ static struct vfio_device *vfio_group_get_device(struct vfio_group *group,
 }
 
 /*
- * Whitelist some drivers that we know are safe (no dma) or just sit on
- * a device.  It's not always practical to leave a device within a group
- * driverless as it could get re-bound to something unsafe.
+ * Some drivers, like pci-stub, are only used to prevent other drivers from
+ * claiming a device and are therefore perfectly legitimate for a user owned
+ * group.  The pci-stub driver has no dependencies on DMA or the IOVA mapping
+ * of the device, but it does prevent the user from having direct access to
+ * the device, which is useful in some circumstances.
+ *
+ * We also assume that we can include PCI interconnect devices, ie. bridges.
+ * IOMMU grouping on PCI necessitates that if we lack isolation on a bridge
+ * then all of the downstream devices will be part of the same IOMMU group as
+ * the bridge.  Thus, if placing the bridge into the user owned IOVA space
+ * breaks anything, it only does so for user owned devices downstream.  Note
+ * that error notification via MSI can be affected for platforms that handle
+ * MSI within the same IOVA space as DMA.
  */
-static const char * const vfio_driver_whitelist[] = { "pci-stub", "pcieport" };
+static const char * const vfio_driver_whitelist[] = { "pci-stub" };
 
-static bool vfio_whitelisted_driver(struct device_driver *drv)
+static bool vfio_dev_whitelisted(struct device *dev, struct device_driver *drv)
 {
 	int i;
+
+	if (dev_is_pci(dev)) {
+		struct pci_dev *pdev = to_pci_dev(dev);
+
+		if (pdev->hdr_type != PCI_HEADER_TYPE_NORMAL)
+			return true;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(vfio_driver_whitelist); i++) {
 		if (!strcmp(drv->name, vfio_driver_whitelist[i]))
@@ -462,6 +508,7 @@ static bool vfio_whitelisted_driver(struct device_driver *drv)
  *  - driver-less
  *  - bound to a vfio driver
  *  - bound to a whitelisted driver
+ *  - a PCI interconnect device
  *
  * We use two methods to determine whether a device is bound to a vfio
  * driver.  The first is to test whether the device exists in the vfio
@@ -486,7 +533,7 @@ static int vfio_dev_viable(struct device *dev, void *data)
 	}
 	mutex_unlock(&group->unbound_lock);
 
-	if (!ret || !drv || vfio_whitelisted_driver(drv))
+	if (!ret || !drv || vfio_dev_whitelisted(dev, drv))
 		return 0;
 
 	device = vfio_group_get_device(group, dev);
@@ -517,7 +564,7 @@ static int vfio_group_nb_add_dev(struct vfio_group *group, struct device *dev)
 		return 0;
 
 	/* TODO Prevent device auto probing */
-	WARN("Device %s added to live group %d!\n", dev_name(dev),
+	WARN(1, "Device %s added to live group %d!\n", dev_name(dev),
 	     iommu_group_id(group->iommu_group));
 
 	return 0;
@@ -601,7 +648,14 @@ static int vfio_iommu_group_notifier(struct notifier_block *nb,
 		break;
 	}
 
-	vfio_group_put(group);
+	/*
+	 * If we're the last reference to the group, the group will be
+	 * released, which includes unregistering the iommu group notifier.
+	 * We hold a read-lock on that notifier list, unregistering needs
+	 * a write-lock... deadlock.  Release our reference asynchronously
+	 * to avoid that situation.
+	 */
+	vfio_group_schedule_put(group);
 	return NOTIFY_OK;
 }
 
@@ -661,22 +715,51 @@ int vfio_add_group_dev(struct device *dev,
 EXPORT_SYMBOL_GPL(vfio_add_group_dev);
 
 /**
- * Get a reference to the vfio_device for a device that is known to
- * be bound to a vfio driver.  The driver implicitly holds a
- * vfio_device reference between vfio_add_group_dev and
- * vfio_del_group_dev.  We can therefore use drvdata to increment
- * that reference from the struct device.  This additional
- * reference must be released by calling vfio_device_put.
+ * Get a reference to the vfio_device for a device.  Even if the
+ * caller thinks they own the device, they could be racing with a
+ * release call path, so we can't trust drvdata for the shortcut.
+ * Go the long way around, from the iommu_group to the vfio_group
+ * to the vfio_device.
  */
 struct vfio_device *vfio_device_get_from_dev(struct device *dev)
 {
-	struct vfio_device *device = dev_get_drvdata(dev);
+	struct iommu_group *iommu_group;
+	struct vfio_group *group;
+	struct vfio_device *device;
 
-	vfio_device_get(device);
+	iommu_group = iommu_group_get(dev);
+	if (!iommu_group)
+		return NULL;
+
+	group = vfio_group_get_from_iommu(iommu_group);
+	iommu_group_put(iommu_group);
+	if (!group)
+		return NULL;
+
+	device = vfio_group_get_device(group, dev);
+	vfio_group_put(group);
 
 	return device;
 }
 EXPORT_SYMBOL_GPL(vfio_device_get_from_dev);
+
+static struct vfio_device *vfio_device_get_from_name(struct vfio_group *group,
+						     char *buf)
+{
+	struct vfio_device *it, *device = NULL;
+
+	mutex_lock(&group->device_lock);
+	list_for_each_entry(it, &group->device_list, group_next) {
+		if (!strcmp(dev_name(it->dev), buf)) {
+			device = it;
+			vfio_device_get(device);
+			break;
+		}
+	}
+	mutex_unlock(&group->device_lock);
+
+	return device;
+}
 
 /*
  * Caller must hold a reference to the vfio_device
@@ -1187,53 +1270,53 @@ static int vfio_group_get_device_fd(struct vfio_group *group, char *buf)
 {
 	struct vfio_device *device;
 	struct file *filep;
-	int ret = -ENODEV;
+	int ret;
 
 	if (0 == atomic_read(&group->container_users) ||
 	    !group->container->iommu_driver || !vfio_group_viable(group))
 		return -EINVAL;
 
-	mutex_lock(&group->device_lock);
-	list_for_each_entry(device, &group->device_list, group_next) {
-		if (strcmp(dev_name(device->dev), buf))
-			continue;
+	device = vfio_device_get_from_name(group, buf);
+	if (!device)
+		return -ENODEV;
 
-		ret = device->ops->open(device->device_data);
-		if (ret)
-			break;
-		/*
-		 * We can't use anon_inode_getfd() because we need to modify
-		 * the f_mode flags directly to allow more than just ioctls
-		 */
-		ret = get_unused_fd_flags(O_CLOEXEC);
-		if (ret < 0) {
-			device->ops->release(device->device_data);
-			break;
-		}
-
-		filep = anon_inode_getfile("[vfio-device]", &vfio_device_fops,
-					   device, O_RDWR);
-		if (IS_ERR(filep)) {
-			put_unused_fd(ret);
-			ret = PTR_ERR(filep);
-			device->ops->release(device->device_data);
-			break;
-		}
-
-		/*
-		 * TODO: add an anon_inode interface to do this.
-		 * Appears to be missing by lack of need rather than
-		 * explicitly prevented.  Now there's need.
-		 */
-		filep->f_mode |= (FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE);
-
-		vfio_device_get(device);
-		atomic_inc(&group->container_users);
-
-		fd_install(ret, filep);
-		break;
+	ret = device->ops->open(device->device_data);
+	if (ret) {
+		vfio_device_put(device);
+		return ret;
 	}
-	mutex_unlock(&group->device_lock);
+
+	/*
+	 * We can't use anon_inode_getfd() because we need to modify
+	 * the f_mode flags directly to allow more than just ioctls
+	 */
+	ret = get_unused_fd_flags(O_CLOEXEC);
+	if (ret < 0) {
+		device->ops->release(device->device_data);
+		vfio_device_put(device);
+		return ret;
+	}
+
+	filep = anon_inode_getfile("[vfio-device]", &vfio_device_fops,
+				   device, O_RDWR);
+	if (IS_ERR(filep)) {
+		put_unused_fd(ret);
+		ret = PTR_ERR(filep);
+		device->ops->release(device->device_data);
+		vfio_device_put(device);
+		return ret;
+	}
+
+	/*
+	 * TODO: add an anon_inode interface to do this.
+	 * Appears to be missing by lack of need rather than
+	 * explicitly prevented.  Now there's need.
+	 */
+	filep->f_mode |= (FMODE_LSEEK | FMODE_PREAD | FMODE_PWRITE);
+
+	atomic_inc(&group->container_users);
+
+	fd_install(ret, filep);
 
 	return ret;
 }
@@ -1503,6 +1586,15 @@ void vfio_group_put_external_user(struct vfio_group *group)
 	vfio_group_try_dissolve_container(group);
 }
 EXPORT_SYMBOL_GPL(vfio_group_put_external_user);
+
+bool vfio_external_group_match_file(struct vfio_group *test_group,
+				    struct file *filep)
+{
+	struct vfio_group *group = filep->private_data;
+
+	return (filep->f_op == &vfio_group_fops) && (group == test_group);
+}
+EXPORT_SYMBOL_GPL(vfio_external_group_match_file);
 
 int vfio_external_user_iommu_id(struct vfio_group *group)
 {

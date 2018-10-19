@@ -215,14 +215,19 @@ done:
 
 static inline void hub_descriptor(struct usb_hub_descriptor *desc)
 {
+	int width;
+
 	memset(desc, 0, sizeof(*desc));
 	desc->bDescriptorType = USB_DT_HUB;
-	desc->bDescLength = 9;
-	desc->wHubCharacteristics = __constant_cpu_to_le16(
+	desc->wHubCharacteristics = cpu_to_le16(
 		HUB_CHAR_INDV_PORT_LPSM | HUB_CHAR_COMMON_OCPM);
+
 	desc->bNbrPorts = VHCI_NPORTS;
-	desc->u.hs.DeviceRemovable[0] = 0xff;
-	desc->u.hs.DeviceRemovable[1] = 0xff;
+	BUILD_BUG_ON(VHCI_NPORTS > USB_MAXCHILDREN);
+	width = desc->bNbrPorts / 8 + 1;
+	desc->bDescLength = USB_DT_HUB_NONVAR_SIZE + 2 * width;
+	memset(&desc->u.hs.DeviceRemovable[0], 0, width);
+	memset(&desc->u.hs.DeviceRemovable[width], 0xff, width);
 }
 
 static int vhci_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
@@ -565,7 +570,9 @@ no_need_xmit:
 	usb_hcd_unlink_urb_from_ep(hcd, urb);
 no_need_unlink:
 	spin_unlock(&the_controller->lock);
-	usb_hcd_giveback_urb(vhci_to_hcd(the_controller), urb, urb->status);
+	if (!ret)
+		usb_hcd_giveback_urb(vhci_to_hcd(the_controller),
+				     urb, urb->status);
 	return ret;
 }
 
@@ -629,7 +636,7 @@ static int vhci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 		/* URB was never linked! or will be soon given back by
 		 * vhci_rx. */
 		spin_unlock(&the_controller->lock);
-		return 0;
+		return -EIDRM;
 	}
 
 	{

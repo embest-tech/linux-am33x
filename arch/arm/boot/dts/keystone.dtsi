@@ -12,6 +12,7 @@
 #include "skeleton.dtsi"
 
 / {
+	compatible = "ti,keystone";
 	model = "Texas Instruments Keystone 2 SoC";
 	#address-cells = <2>;
 	#size-cells = <2>;
@@ -267,31 +268,12 @@
 				  1 0 0x21000A00 0x00000100>;
 		};
 
-		mdio: mdio@02090300 {
-			compatible	= "ti,keystone_mdio", "ti,davinci_mdio";
-			#address-cells = <1>;
-			#size-cells = <0>;
-			reg		= <0x02090300 0x100>;
-			status = "disabled";
-			clocks = <&clkpa>;
-			clock-names = "fck";
-			bus_freq	= <2500000>;
-		};
-
 		kirq0: keystone_irq@26202a0 {
 			compatible = "ti,keystone-irq";
 			interrupts = <GIC_SPI 4 IRQ_TYPE_EDGE_RISING>;
 			interrupt-controller;
 			#interrupt-cells = <1>;
 			ti,syscon-dev = <&devctrl 0x2a0>;
-		};
-
-		pcie0_phy: pciephy@2320000 {
-			#phy-cells = <0>;
-			compatible = "ti,keystone-serdes-phy";
-			reg = <0x02320000 0x4000>;
-			reg-names = "reg_serdes";
-			status = "disabled";
 		};
 
 		pcie0: pcie@21800000 {
@@ -307,10 +289,6 @@
 			status = "disabled";
 			device_type = "pci";
 			num-lanes = <2>;
-
-			/* PCIE phy */
-			phys = <&pcie0_phy>;
-			phy-names = "pcie-phy";
 
 			#interrupt-cells = <1>;
 			interrupt-map-mask = <0 0 0 7>;

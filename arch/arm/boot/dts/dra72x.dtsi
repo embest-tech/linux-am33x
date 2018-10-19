@@ -25,32 +25,7 @@
 			cooling-min-level = <0>;
 			cooling-max-level = <2>;
 			#cooling-cells = <2>; /* min followed by max */
-
-			operating-points = <
-				/* kHz    uV */
-				1000000 1060000
-			>;
-
-			clocks = <&dpll_mpu_ck>;
-			clock-names = "cpu";
-
-			clock-latency = <300000>; /* From omap-cpufreq driver */
 		};
-	};
-
-	dra72_vip_mux: pinmux@4a002e8c {
-		compatible = "pinctrl-single";
-		reg = <0x4a002e8c 0x4>;
-		#address-cells = <1>;
-		#size-cells = <0>;
-		pinctrl-single,register-width = <32>;
-		pinctrl-single,function-mask = <0x7f>;
-	};
-
-	aliases {
-		rproc0 = &ipu1;
-		rproc1 = &ipu2;
-		rproc2 = &dsp1;
 	};
 
 	pmu {
@@ -69,22 +44,6 @@
 	clocks = <&dss_dss_clk>,
 		 <&dss_video1_clk>;
 	clock-names = "fck", "video1_clk";
-};
-
-&mmc1 {
-	compatible = "ti,omap4-hsmmc";
-};
-
-&mmc2 {
-	compatible = "ti,omap4-hsmmc";
-};
-
-&mmc3 {
-	compatible = "ti,omap4-hsmmc";
-};
-
-&mmc4 {
-	compatible = "ti,omap4-hsmmc";
 };
 
 &mailbox5 {

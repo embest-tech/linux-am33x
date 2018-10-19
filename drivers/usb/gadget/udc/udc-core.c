@@ -28,7 +28,6 @@
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb.h>
-#include <linux/usb/otg.h>
 
 /**
  * struct usb_udc - describes one usb device controller
@@ -38,7 +37,6 @@
  * @list - for use by the udc class driver
  * @vbus - for udcs who care about vbus status, this value is real vbus status;
  * for udcs who do not care about vbus status, this value is always true
- * @is_otg - we're registered with OTG core and it takes care of UDC start/stop
  *
  * This represents the internal data structure which is used by the UDC-class
  * to hold information about udc driver and gadget together.
@@ -49,7 +47,6 @@ struct usb_udc {
 	struct device			dev;
 	struct list_head		list;
 	bool				vbus;
-	bool				is_otg;
 };
 
 static struct class *udc_class;
@@ -63,26 +60,28 @@ static DEFINE_MUTEX(udc_lock);
 int usb_gadget_map_request(struct usb_gadget *gadget,
 		struct usb_request *req, int is_in)
 {
+	struct device *dev = gadget->dev.parent;
+
 	if (req->length == 0)
 		return 0;
 
 	if (req->num_sgs) {
 		int     mapped;
 
-		mapped = dma_map_sg(&gadget->dev, req->sg, req->num_sgs,
+		mapped = dma_map_sg(dev, req->sg, req->num_sgs,
 				is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 		if (mapped == 0) {
-			dev_err(&gadget->dev, "failed to map SGs\n");
+			dev_err(dev, "failed to map SGs\n");
 			return -EFAULT;
 		}
 
 		req->num_mapped_sgs = mapped;
 	} else {
-		req->dma = dma_map_single(&gadget->dev, req->buf, req->length,
+		req->dma = dma_map_single(dev, req->buf, req->length,
 				is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 
-		if (dma_mapping_error(&gadget->dev, req->dma)) {
-			dev_err(&gadget->dev, "failed to map buffer\n");
+		if (dma_mapping_error(dev, req->dma)) {
+			dev_err(dev, "failed to map buffer\n");
 			return -EFAULT;
 		}
 	}
@@ -98,12 +97,12 @@ void usb_gadget_unmap_request(struct usb_gadget *gadget,
 		return;
 
 	if (req->num_mapped_sgs) {
-		dma_unmap_sg(&gadget->dev, req->sg, req->num_mapped_sgs,
+		dma_unmap_sg(gadget->dev.parent, req->sg, req->num_mapped_sgs,
 				is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 
 		req->num_mapped_sgs = 0;
 	} else {
-		dma_unmap_single(&gadget->dev, req->dma, req->length,
+		dma_unmap_single(gadget->dev.parent, req->dma, req->length,
 				is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 	}
 }
@@ -129,6 +128,96 @@ void usb_gadget_giveback_request(struct usb_ep *ep,
 	req->complete(ep, req);
 }
 EXPORT_SYMBOL_GPL(usb_gadget_giveback_request);
+
+/* ------------------------------------------------------------------------- */
+
+/**
+ * gadget_find_ep_by_name - returns ep whose name is the same as sting passed
+ *	in second parameter or NULL if searched endpoint not found
+ * @g: controller to check for quirk
+ * @name: name of searched endpoint
+ */
+struct usb_ep *gadget_find_ep_by_name(struct usb_gadget *g, const char *name)
+{
+	struct usb_ep *ep;
+
+	gadget_for_each_ep(ep, g) {
+		if (!strcmp(ep->name, name))
+			return ep;
+	}
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(gadget_find_ep_by_name);
+
+/* ------------------------------------------------------------------------- */
+
+int usb_gadget_ep_match_desc(struct usb_gadget *gadget,
+		struct usb_ep *ep, struct usb_endpoint_descriptor *desc,
+		struct usb_ss_ep_comp_descriptor *ep_comp)
+{
+	u8		type;
+	u16		max;
+	int		num_req_streams = 0;
+
+	/* endpoint already claimed? */
+	if (ep->claimed)
+		return 0;
+
+	type = usb_endpoint_type(desc);
+	max = 0x7ff & usb_endpoint_maxp(desc);
+
+	if (usb_endpoint_dir_in(desc) && !ep->caps.dir_in)
+		return 0;
+	if (usb_endpoint_dir_out(desc) && !ep->caps.dir_out)
+		return 0;
+
+	if (max > ep->maxpacket_limit)
+		return 0;
+
+	/* "high bandwidth" works only at high speed */
+	if (!gadget_is_dualspeed(gadget) && usb_endpoint_maxp(desc) & (3<<11))
+		return 0;
+
+	switch (type) {
+	case USB_ENDPOINT_XFER_CONTROL:
+		/* only support ep0 for portable CONTROL traffic */
+		return 0;
+	case USB_ENDPOINT_XFER_ISOC:
+		if (!ep->caps.type_iso)
+			return 0;
+		/* ISO:  limit 1023 bytes full speed, 1024 high/super speed */
+		if (!gadget_is_dualspeed(gadget) && max > 1023)
+			return 0;
+		break;
+	case USB_ENDPOINT_XFER_BULK:
+		if (!ep->caps.type_bulk)
+			return 0;
+		if (ep_comp && gadget_is_superspeed(gadget)) {
+			/* Get the number of required streams from the
+			 * EP companion descriptor and see if the EP
+			 * matches it
+			 */
+			num_req_streams = ep_comp->bmAttributes & 0x1f;
+			if (num_req_streams > ep->max_streams)
+				return 0;
+		}
+		break;
+	case USB_ENDPOINT_XFER_INT:
+		/* Bulk endpoints handle interrupt transfers,
+		 * except the toggle-quirky iso-synch kind
+		 */
+		if (!ep->caps.type_int && !ep->caps.type_bulk)
+			return 0;
+		/* INT:  limit 64 bytes full speed, 1024 high/super speed */
+		if (!gadget_is_dualspeed(gadget) && max > 64)
+			return 0;
+		break;
+	}
+
+	return 1;
+}
+EXPORT_SYMBOL_GPL(usb_gadget_ep_match_desc);
 
 /* ------------------------------------------------------------------------- */
 
@@ -211,7 +300,6 @@ EXPORT_SYMBOL_GPL(usb_gadget_udc_reset);
  */
 static inline int usb_gadget_udc_start(struct usb_udc *udc)
 {
-	dev_dbg(&udc->dev, "%s\n", __func__);
 	return udc->gadget->ops->udc_start(udc->gadget, udc->driver);
 }
 
@@ -229,78 +317,7 @@ static inline int usb_gadget_udc_start(struct usb_udc *udc)
  */
 static inline void usb_gadget_udc_stop(struct usb_udc *udc)
 {
-	dev_dbg(&udc->dev, "%s\n", __func__);
 	udc->gadget->ops->udc_stop(udc->gadget);
-}
-
-/**
- * usb_gadget_start - start the usb gadget controller and connect to bus
- * @gadget: the gadget device to start
- *
- * This is external API for use by OTG core.
- *
- * Start the usb device controller and connect to bus (enable pull).
- */
-static int usb_gadget_start(struct usb_gadget *gadget)
-{
-	int ret;
-	struct usb_udc *udc = NULL;
-
-	dev_dbg(&gadget->dev, "%s\n", __func__);
-	mutex_lock(&udc_lock);
-	list_for_each_entry(udc, &udc_list, list)
-		if (udc->gadget == gadget)
-			goto found;
-
-	dev_err(gadget->dev.parent, "%s: gadget not registered.\n",
-		__func__);
-	mutex_unlock(&udc_lock);
-	return -EINVAL;
-
-found:
-	ret = usb_gadget_udc_start(udc);
-	if (ret)
-		dev_err(&udc->dev, "USB Device Controller didn't start: %d\n",
-			ret);
-	else
-		usb_udc_connect_control(udc);
-
-	mutex_unlock(&udc_lock);
-
-	return ret;
-}
-
-/**
- * usb_gadget_stop - disconnect from bus and stop the usb gadget
- * @gadget: The gadget device we want to stop
- *
- * This is external API for use by OTG core.
- *
- * Disconnect from the bus (disable pull) and stop the
- * gadget controller.
- */
-static int usb_gadget_stop(struct usb_gadget *gadget)
-{
-	struct usb_udc *udc = NULL;
-
-	dev_dbg(&gadget->dev, "%s\n", __func__);
-	mutex_lock(&udc_lock);
-	list_for_each_entry(udc, &udc_list, list)
-		if (udc->gadget == gadget)
-			goto found;
-
-	dev_err(gadget->dev.parent, "%s: gadget not registered.\n",
-		__func__);
-	mutex_unlock(&udc_lock);
-	return -EINVAL;
-
-found:
-	usb_gadget_disconnect(udc->gadget);
-	udc->driver->disconnect(udc->gadget);
-	usb_gadget_udc_stop(udc);
-	mutex_unlock(&udc_lock);
-
-	return 0;
 }
 
 /**
@@ -421,7 +438,6 @@ int usb_add_gadget_udc(struct device *parent, struct usb_gadget *gadget)
 }
 EXPORT_SYMBOL_GPL(usb_add_gadget_udc);
 
-/* udc_lock must be held */
 static void usb_gadget_remove_driver(struct usb_udc *udc)
 {
 	dev_dbg(&udc->dev, "unregistering UDC driver [%s]\n",
@@ -429,18 +445,10 @@ static void usb_gadget_remove_driver(struct usb_udc *udc)
 
 	kobject_uevent(&udc->dev.kobj, KOBJ_CHANGE);
 
-	/* If OTG, the otg core ensures UDC is stopped on unregister */
-	if (udc->is_otg) {
-		mutex_unlock(&udc_lock);
-		usb_otg_unregister_gadget(udc->gadget);
-		mutex_lock(&udc_lock);
-	} else {
-		usb_gadget_disconnect(udc->gadget);
-		udc->driver->disconnect(udc->gadget);
-		usb_gadget_udc_stop(udc);
-	}
-
+	usb_gadget_disconnect(udc->gadget);
+	udc->driver->disconnect(udc->gadget);
 	udc->driver->unbind(udc->gadget);
+	usb_gadget_udc_stop(udc);
 
 	udc->driver = NULL;
 	udc->dev.driver = NULL;
@@ -465,11 +473,10 @@ void usb_del_gadget_udc(struct usb_gadget *gadget)
 
 	mutex_lock(&udc_lock);
 	list_del(&udc->list);
+	mutex_unlock(&udc_lock);
 
 	if (udc->driver)
 		usb_gadget_remove_driver(udc);
-
-	mutex_unlock(&udc_lock);
 
 	kobject_uevent(&udc->dev.kobj, KOBJ_REMOVE);
 	flush_work(&gadget->work);
@@ -480,12 +487,6 @@ EXPORT_SYMBOL_GPL(usb_del_gadget_udc);
 
 /* ------------------------------------------------------------------------- */
 
-struct otg_gadget_ops otg_gadget_intf = {
-	.start = usb_gadget_start,
-	.stop = usb_gadget_stop,
-};
-
-/* udc_lock must be held */
 static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *driver)
 {
 	int ret;
@@ -500,19 +501,12 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 	ret = driver->bind(udc->gadget, driver);
 	if (ret)
 		goto err1;
-
-	/* If OTG, the otg core starts the UDC when needed */
-	mutex_unlock(&udc_lock);
-	udc->is_otg = !usb_otg_register_gadget(udc->gadget, &otg_gadget_intf);
-	mutex_lock(&udc_lock);
-	if (!udc->is_otg) {
-		ret = usb_gadget_udc_start(udc);
-		if (ret) {
-			driver->unbind(udc->gadget);
-			goto err1;
-		}
-		usb_udc_connect_control(udc);
+	ret = usb_gadget_udc_start(udc);
+	if (ret) {
+		driver->unbind(udc->gadget);
+		goto err1;
 	}
+	usb_udc_connect_control(udc);
 
 	kobject_uevent(&udc->dev.kobj, KOBJ_CHANGE);
 	return 0;
@@ -624,15 +618,9 @@ static ssize_t usb_udc_softconn_store(struct device *dev,
 		return -EOPNOTSUPP;
 	}
 
-	/* In OTG mode we don't support softconnect, but b_bus_req */
-	if (udc->is_otg) {
-		dev_err(dev, "soft-connect not supported in OTG mode\n");
-		return -EOPNOTSUPP;
-	}
-
 	if (sysfs_streq(buf, "connect")) {
 		usb_gadget_udc_start(udc);
-		usb_udc_connect_control(udc);
+		usb_gadget_connect(udc->gadget);
 	} else if (sysfs_streq(buf, "disconnect")) {
 		usb_gadget_disconnect(udc->gadget);
 		udc->driver->disconnect(udc->gadget);

@@ -129,12 +129,6 @@ enum sgtl5000_micbias_resistor {
 	SGTL5000_MICBIAS_8K = 8,
 };
 
-enum mcasp_chan {
-	MCASP_CHAN_INVALID,
-	MCASP_CHAN_0,
-	MCASP_CHAN_1,
-};
-
 /* sgtl5000 private structure in codec */
 struct sgtl5000_priv {
 	int sysclk;	/* sysclk rate */
@@ -147,146 +141,7 @@ struct sgtl5000_priv {
 	int revision;
 	u8 micbias_resistor;
 	u8 micbias_voltage;
-
-	enum mcasp_chan mcasp_chan;
 };
-
-/*
- * for MINI8610B + SBC8600 SGTL5000
- */
-#if defined(CONFIG_SOC_AM33XX)
-#include <linux/io.h>
-
-#define AM335X_CM_PER                           0x44E00000
-#define AM335X_CM_PER_MCASP0_CLKCTRL_OFFSET     0x34
-#define AM335X_CM_PER_MCASP1_CLKCTRL_OFFSET     0x68
-#define CM_PER_MCASP_CLKCTRL_IDLEST_ENABLE      (0 << 16)
-#define CM_PER_MCASP_CLKCTRL_IDLEST_MASK        (3 << 16)
-#define CM_PER_MCASP_CLKCTRL_IDLEST_DISABLE     (3 << 16)
-#define CM_PER_MCASP_CLKCTRL_MODULEMODE_ENABLE  (2 << 0)
-#define CM_PER_MCASP_CLKCTRL_MODULEMODE_DISABLE (0 << 0)
-#define CM_PER_MCASP_CLKCTRL_MODULEMODE_MASK    (3 << 0)
-#define AM335X_MCASP0_CFG                       0x48038000
-#define AM335X_MCASP1_CFG                       0x4803C000
-#define AM335X_MCASP_PDIR_OFFSET				0x14
-#define AM335X_MCASP_PDIR_AHCLKX_MASK			(1 << 27)
-
-static int am335x_enable_ahclkx_output(enum mcasp_chan chan, bool enable)
-{
-	int value;
-	void __iomem *mem_addr;
-	resource_size_t regs_start;
-
-    switch (chan) {
-    case MCASP_CHAN_0:
-        regs_start = AM335X_MCASP0_CFG + AM335X_MCASP_PDIR_OFFSET;
-        break;
-    case MCASP_CHAN_1:
-        regs_start = AM335X_MCASP1_CFG + AM335X_MCASP_PDIR_OFFSET;
-        break;
-    default:
-        return -ENODEV;
-    }
-
-	mem_addr = ioremap(regs_start, sizeof(int));
-    if (!mem_addr) {
-        printk(KERN_ERR "failed to devm_ioremap\n");
-        return -ENODEV;
-    }
-
-	value = readl(mem_addr);
-
-	if (enable)
-		value |= AM335X_MCASP_PDIR_AHCLKX_MASK;
-	else
-		value &= ~AM335X_MCASP_PDIR_AHCLKX_MASK;
-
-	writel(value, mem_addr);
-
-	iounmap(mem_addr);
-
-	return 0;
-}
-
-static int am335x_enable_mcasp_clock(enum mcasp_chan chan, bool enable)
-{
-	int ret;
-    int value;
-	static bool status;
-    void __iomem *mem_addr;
-    resource_size_t regs_start;
-
-    value = enable ? (CM_PER_MCASP_CLKCTRL_MODULEMODE_ENABLE) :
-                     (CM_PER_MCASP_CLKCTRL_MODULEMODE_DISABLE);
-
-    switch (chan) {
-    case MCASP_CHAN_0:
-        regs_start = AM335X_CM_PER + AM335X_CM_PER_MCASP0_CLKCTRL_OFFSET;
-        break;
-    case MCASP_CHAN_1:
-        regs_start = AM335X_CM_PER + AM335X_CM_PER_MCASP1_CLKCTRL_OFFSET;
-        break;
-    default:
-        return -ENODEV;
-    }
-
-    mem_addr = ioremap(regs_start, sizeof(int));
-    if (!mem_addr) {
-        printk(KERN_ERR "failed to devm_ioremap\n");
-        return -ENODEV;
-    }
-
-	ret = readl(mem_addr);
-
-	if (enable) {
-		status = ret & CM_PER_MCASP_CLKCTRL_IDLEST_MASK;
-		if (status) {
-			writeb(value, mem_addr);
-
-			while (readl(mem_addr) & CM_PER_MCASP_CLKCTRL_IDLEST_MASK);
-		}
-	}
-	else {
-		if (status)
-			writeb(value, mem_addr);
-	}
-
-    iounmap(mem_addr);
-
-    return 0;
-}
-
-static void sgtl5000_lock(void *args)
-{
-	struct sgtl5000_priv *sgtl5000 = (struct sgtl5000_priv *)args;
-	int ret;
-
-	if (!args)
-		return;
-
-	ret = am335x_enable_mcasp_clock(sgtl5000->mcasp_chan, 1);
-	if (ret) {
-		printk(KERN_ERR "sgtl5000: am335x enable mcasp clock failed: %d\n", ret);
-		return;
-	}
-
-	ret = am335x_enable_ahclkx_output(sgtl5000->mcasp_chan, 1);
-	if (ret) {
-		printk(KERN_ERR "sgtl5000: am335x enable ahclkx output failed: %d\n", ret);
-		return;
-	}
-}
-
-static void sgtl5000_unlock(void *args)
-{
-	struct sgtl5000_priv *sgtl5000 = (struct sgtl5000_priv *)args;
-
-	if (!args)
-		return;
-
-	am335x_enable_mcasp_clock(sgtl5000->mcasp_chan, 0);
-}
-#endif 	/* CONFIG_SOC_AM33XX */
 
 /*
  * mic_bias power on/off share the same register bits with
@@ -312,10 +167,8 @@ static int mic_bias_event(struct snd_soc_dapm_widget *w,
 		break;
 
 	case SND_SOC_DAPM_PRE_PMD:
-#if !defined(CONFIG_SOC_AM33XX)
 		snd_soc_update_bits(codec, SGTL5000_CHIP_MIC_CTRL,
 				SGTL5000_BIAS_R_MASK, 0);
-#endif
 		break;
 	}
 	return 0;
@@ -330,14 +183,13 @@ static int power_vag_event(struct snd_soc_dapm_widget *w,
 	struct snd_kcontrol *kcontrol, int event)
 {
 	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
-	const u32 mask = SGTL5000_DAC_POWERUP | SGTL5000_ADC_POWERUP | 
-					SGTL5000_HP_POWERUP;
+	const u32 mask = SGTL5000_DAC_POWERUP | SGTL5000_ADC_POWERUP;
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
 		snd_soc_update_bits(codec, SGTL5000_CHIP_ANA_POWER,
-			SGTL5000_VAG_POWERUP | SGTL5000_HP_POWERUP,
-			SGTL5000_VAG_POWERUP | SGTL5000_HP_POWERUP);
+			SGTL5000_VAG_POWERUP, SGTL5000_VAG_POWERUP);
+		msleep(400);
 		break;
 
 	case SND_SOC_DAPM_PRE_PMD:
@@ -349,10 +201,9 @@ static int power_vag_event(struct snd_soc_dapm_widget *w,
 		if ((snd_soc_read(codec, SGTL5000_CHIP_ANA_POWER) &
 				mask) != mask) {
 			snd_soc_update_bits(codec, SGTL5000_CHIP_ANA_POWER,
-				SGTL5000_VAG_POWERUP | SGTL5000_HP_POWERUP, 0);
+				SGTL5000_VAG_POWERUP, 0);
 			msleep(400);
 		}
-
 		break;
 	default:
 		break;
@@ -556,11 +407,10 @@ static int dac_put_volsw(struct snd_kcontrol *kcontrol,
 static const DECLARE_TLV_DB_SCALE(capture_6db_attenuate, -600, 600, 0);
 
 /* tlv for mic gain, 0db 20db 30db 40db */
-static const unsigned int mic_gain_tlv[] = {
-	TLV_DB_RANGE_HEAD(2),
+static const DECLARE_TLV_DB_RANGE(mic_gain_tlv,
 	0, 0, TLV_DB_SCALE_ITEM(0, 0, 0),
-	1, 3, TLV_DB_SCALE_ITEM(2000, 1000, 0),
-};
+	1, 3, TLV_DB_SCALE_ITEM(2000, 1000, 0)
+);
 
 /* tlv for hp volume, -51.5db to 12.0db, step .5db */
 static const DECLARE_TLV_DB_SCALE(headphone_volume, -5150, 50, 0);
@@ -603,11 +453,6 @@ static int sgtl5000_digital_mute(struct snd_soc_dai *codec_dai, int mute)
 
 	snd_soc_update_bits(codec, SGTL5000_CHIP_ADCDAC_CTRL,
 			adcdac_ctrl, mute ? adcdac_ctrl : 0);
-	/*
-	 * avoid output noise at the end of playback
-	 */
-	snd_soc_update_bits(codec, SGTL5000_CHIP_ANA_CTRL, 
-			SGTL5000_HP_MUTE, mute ? SGTL5000_HP_MUTE : 0);
 
 	return 0;
 }
@@ -1103,7 +948,7 @@ static int sgtl5000_set_bias_level(struct snd_soc_codec *codec,
 	case SND_SOC_BIAS_PREPARE:
 		break;
 	case SND_SOC_BIAS_STANDBY:
-		if (codec->dapm.bias_level == SND_SOC_BIAS_OFF) {
+		if (snd_soc_codec_get_bias_level(codec) == SND_SOC_BIAS_OFF) {
 			ret = regulator_bulk_enable(
 						ARRAY_SIZE(sgtl5000->supplies),
 						sgtl5000->supplies);
@@ -1134,7 +979,6 @@ static int sgtl5000_set_bias_level(struct snd_soc_codec *codec,
 		break;
 	}
 
-	codec->dapm.bias_level = level;
 	return 0;
 }
 
@@ -1247,6 +1091,19 @@ static bool sgtl5000_readable(struct device *dev, unsigned int reg)
 }
 
 /*
+ * This precalculated table contains all (vag_val * 100 / lo_calcntrl) results
+ * to select an appropriate lo_vol_* in SGTL5000_CHIP_LINE_OUT_VOL
+ * The calculatation was done for all possible register values which
+ * is the array index and the following formula: 10^((idx−15)/40) * 100
+ */
+static const u8 vol_quot_table[] = {
+	42, 45, 47, 50, 53, 56, 60, 63,
+	67, 71, 75, 79, 84, 89, 94, 100,
+	106, 112, 119, 126, 133, 141, 150, 158,
+	168, 178, 188, 200, 211, 224, 237, 251
+};
+
+/*
  * sgtl5000 has 3 internal power supplies:
  * 1. VAG, normally set to vdda/2
  * 2. charge pump, set to different value
@@ -1266,6 +1123,10 @@ static int sgtl5000_set_power_regs(struct snd_soc_codec *codec)
 	u16 ana_pwr;
 	u16 lreg_ctrl;
 	int vag;
+	int lo_vag;
+	int vol_quot;
+	int lo_vol;
+	size_t i;
 	struct sgtl5000_priv *sgtl5000 = snd_soc_codec_get_drvdata(codec);
 
 	vdda  = regulator_get_voltage(sgtl5000->supplies[VDDA].consumer);
@@ -1353,22 +1214,44 @@ static int sgtl5000_set_power_regs(struct snd_soc_codec *codec)
 			SGTL5000_ANA_GND_MASK, vag << SGTL5000_ANA_GND_SHIFT);
 
 	/* set line out VAG to vddio / 2, in range (0.8v, 1.675v) */
-	vag = vddio / 2;
-	if (vag <= SGTL5000_LINE_OUT_GND_BASE)
-		vag = 0;
-	else if (vag >= SGTL5000_LINE_OUT_GND_BASE +
+	lo_vag = vddio / 2;
+	if (lo_vag <= SGTL5000_LINE_OUT_GND_BASE)
+		lo_vag = 0;
+	else if (lo_vag >= SGTL5000_LINE_OUT_GND_BASE +
 		SGTL5000_LINE_OUT_GND_STP * SGTL5000_LINE_OUT_GND_MAX)
-		vag = SGTL5000_LINE_OUT_GND_MAX;
+		lo_vag = SGTL5000_LINE_OUT_GND_MAX;
 	else
-		vag = (vag - SGTL5000_LINE_OUT_GND_BASE) /
+		lo_vag = (lo_vag - SGTL5000_LINE_OUT_GND_BASE) /
 		    SGTL5000_LINE_OUT_GND_STP;
 
 	snd_soc_update_bits(codec, SGTL5000_CHIP_LINE_OUT_CTRL,
 			SGTL5000_LINE_OUT_CURRENT_MASK |
 			SGTL5000_LINE_OUT_GND_MASK,
-			vag << SGTL5000_LINE_OUT_GND_SHIFT |
+			lo_vag << SGTL5000_LINE_OUT_GND_SHIFT |
 			SGTL5000_LINE_OUT_CURRENT_360u <<
 				SGTL5000_LINE_OUT_CURRENT_SHIFT);
+
+	/*
+	 * Set lineout output level in range (0..31)
+	 * the same value is used for right and left channel
+	 *
+	 * Searching for a suitable index solving this formula:
+	 * idx = 40 * log10(vag_val / lo_cagcntrl) + 15
+	 */
+	vol_quot = (vag * 100) / lo_vag;
+	lo_vol = 0;
+	for (i = 0; i < ARRAY_SIZE(vol_quot_table); i++) {
+		if (vol_quot >= vol_quot_table[i])
+			lo_vol = i;
+		else
+			break;
+	}
+
+	snd_soc_update_bits(codec, SGTL5000_CHIP_LINE_OUT_VOL,
+		SGTL5000_LINE_OUT_VOL_RIGHT_MASK |
+		SGTL5000_LINE_OUT_VOL_LEFT_MASK,
+		lo_vol << SGTL5000_LINE_OUT_VOL_RIGHT_SHIFT |
+		lo_vol << SGTL5000_LINE_OUT_VOL_LEFT_SHIFT);
 
 	return 0;
 }
@@ -1494,8 +1377,8 @@ static int sgtl5000_probe(struct snd_soc_codec *codec)
 			sgtl5000->micbias_resistor << SGTL5000_BIAS_R_SHIFT);
 
 	snd_soc_update_bits(codec, SGTL5000_CHIP_MIC_CTRL,
-			SGTL5000_BIAS_R_MASK,
-			sgtl5000->micbias_voltage << SGTL5000_BIAS_R_SHIFT);
+			SGTL5000_BIAS_VOLT_MASK,
+			sgtl5000->micbias_voltage << SGTL5000_BIAS_VOLT_SHIFT);
 	/*
 	 * disable DAP
 	 * TODO:
@@ -1541,7 +1424,7 @@ static struct snd_soc_codec_driver sgtl5000_driver = {
 	.num_dapm_routes = ARRAY_SIZE(sgtl5000_dapm_routes),
 };
 
-static struct regmap_config sgtl5000_regmap = {
+static const struct regmap_config sgtl5000_regmap = {
 	.reg_bits = 16,
 	.val_bits = 16,
 	.reg_stride = 2,
@@ -1553,10 +1436,6 @@ static struct regmap_config sgtl5000_regmap = {
 	.cache_type = REGCACHE_RBTREE,
 	.reg_defaults = sgtl5000_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(sgtl5000_reg_defaults),
-#if defined(CONFIG_SOC_AM33XX)
-	.lock	= (void *)sgtl5000_lock,
-	.unlock	= (void *)sgtl5000_unlock,
-#endif
 };
 
 /*
@@ -1595,61 +1474,6 @@ static int sgtl5000_i2c_probe(struct i2c_client *client,
 	sgtl5000 = devm_kzalloc(&client->dev, sizeof(*sgtl5000), GFP_KERNEL);
 	if (!sgtl5000)
 		return -ENOMEM;
-
-	if (np) {
-		if (!of_property_read_u32(np,
-			"micbias-resistor-k-ohms", &value)) {
-			switch (value) {
-			case SGTL5000_MICBIAS_OFF:
-				sgtl5000->micbias_resistor = 0;
-				break;
-			case SGTL5000_MICBIAS_2K:
-				sgtl5000->micbias_resistor = 1;
-				break;
-			case SGTL5000_MICBIAS_4K:
-				sgtl5000->micbias_resistor = 2;
-				break;
-			case SGTL5000_MICBIAS_8K:
-				sgtl5000->micbias_resistor = 3;
-				break;
-			default:
-				sgtl5000->micbias_resistor = 2;
-				dev_err(&client->dev,
-					"Unsuitable MicBias resistor\n");
-			}
-		} else {
-			/* default is 4Kohms */
-			sgtl5000->micbias_resistor = 2;
-		}
-		if (!of_property_read_u32(np,
-			"micbias-voltage-m-volts", &value)) {
-			/* 1250mV => 0 */
-			/* steps of 250mV */
-			if ((value >= 1250) && (value <= 3000))
-				sgtl5000->micbias_voltage = (value / 250) - 5;
-			else {
-				sgtl5000->micbias_voltage = 0;
-				dev_err(&client->dev,
-					"Unsuitable MicBias resistor\n");
-			}
-		} else {
-			sgtl5000->micbias_voltage = 0;
-		}
-		if (!of_property_read_u32(np, "mcasp_chan", &value)) {
-			switch (value) {
-			case 0:
-				sgtl5000->mcasp_chan = MCASP_CHAN_0;
-				break;
-			case 1:
-				sgtl5000->mcasp_chan = MCASP_CHAN_1;
-				break;
-			default:
-				sgtl5000->mcasp_chan = MCASP_CHAN_INVALID;
-			}
-		}
-	}
-
-	sgtl5000_regmap.lock_arg = (void *)sgtl5000;
 
 	sgtl5000->regmap = devm_regmap_init_i2c(client, &sgtl5000_regmap);
 	if (IS_ERR(sgtl5000->regmap)) {
@@ -1691,6 +1515,47 @@ static int sgtl5000_i2c_probe(struct i2c_client *client,
 	rev = (reg & SGTL5000_REVID_MASK) >> SGTL5000_REVID_SHIFT;
 	dev_info(&client->dev, "sgtl5000 revision 0x%x\n", rev);
 	sgtl5000->revision = rev;
+
+	if (np) {
+		if (!of_property_read_u32(np,
+			"micbias-resistor-k-ohms", &value)) {
+			switch (value) {
+			case SGTL5000_MICBIAS_OFF:
+				sgtl5000->micbias_resistor = 0;
+				break;
+			case SGTL5000_MICBIAS_2K:
+				sgtl5000->micbias_resistor = 1;
+				break;
+			case SGTL5000_MICBIAS_4K:
+				sgtl5000->micbias_resistor = 2;
+				break;
+			case SGTL5000_MICBIAS_8K:
+				sgtl5000->micbias_resistor = 3;
+				break;
+			default:
+				sgtl5000->micbias_resistor = 2;
+				dev_err(&client->dev,
+					"Unsuitable MicBias resistor\n");
+			}
+		} else {
+			/* default is 4Kohms */
+			sgtl5000->micbias_resistor = 2;
+		}
+		if (!of_property_read_u32(np,
+			"micbias-voltage-m-volts", &value)) {
+			/* 1250mV => 0 */
+			/* steps of 250mV */
+			if ((value >= 1250) && (value <= 3000))
+				sgtl5000->micbias_voltage = (value / 250) - 5;
+			else {
+				sgtl5000->micbias_voltage = 0;
+				dev_err(&client->dev,
+					"Unsuitable MicBias voltage\n");
+			}
+		} else {
+			sgtl5000->micbias_voltage = 0;
+		}
+	}
 
 	i2c_set_clientdata(client, sgtl5000);
 
@@ -1736,7 +1601,6 @@ MODULE_DEVICE_TABLE(of, sgtl5000_dt_ids);
 static struct i2c_driver sgtl5000_i2c_driver = {
 	.driver = {
 		   .name = "sgtl5000",
-		   .owner = THIS_MODULE,
 		   .of_match_table = sgtl5000_dt_ids,
 		   },
 	.probe = sgtl5000_i2c_probe,

@@ -22,6 +22,20 @@
 
 struct rcar_du_group;
 
+/**
+ * struct rcar_du_crtc - the CRTC, representing a DU superposition processor
+ * @crtc: base DRM CRTC
+ * @clock: the CRTC functional clock
+ * @extclock: external pixel dot clock (optional)
+ * @mmio_offset: offset of the CRTC registers in the DU MMIO block
+ * @index: CRTC software and hardware index
+ * @started: whether the CRTC has been started and is running
+ * @event: event to post when the pending page flip completes
+ * @flip_wait: wait queue used to signal page flip completion
+ * @outputs: bitmask of the outputs (enum rcar_du_output) driven by this CRTC
+ * @enabled: whether the CRTC is enabled, used to control system resume
+ * @group: CRTC group this CRTC belongs to
+ */
 struct rcar_du_crtc {
 	struct drm_crtc crtc;
 
@@ -53,8 +67,6 @@ enum rcar_du_output {
 
 int rcar_du_crtc_create(struct rcar_du_group *rgrp, unsigned int index);
 void rcar_du_crtc_enable_vblank(struct rcar_du_crtc *rcrtc, bool enable);
-void rcar_du_crtc_cancel_page_flip(struct rcar_du_crtc *rcrtc,
-				   struct drm_file *file);
 void rcar_du_crtc_suspend(struct rcar_du_crtc *rcrtc);
 void rcar_du_crtc_resume(struct rcar_du_crtc *rcrtc);
 

@@ -30,8 +30,6 @@
 /*#include <linux/of.h>*/
 #include <linux/of_device.h>
 #include <linux/platform_data/pixcir_i2c_ts.h>
-#include <linux/of_irq.h>
-#include <linux/pm_wakeirq.h>
 
 #define PIXCIR_MAX_SLOTS       5 /* Max fingers supported by driver */
 
@@ -42,7 +40,6 @@ struct pixcir_i2c_ts_data {
 	struct gpio_desc *gpio_reset;
 	const struct pixcir_i2c_chip_data *chip;
 	int max_fingers;	/* Max fingers supported in this instance */
-	int wakeirq;
 	bool running;
 };
 
@@ -380,7 +377,6 @@ static int __maybe_unused pixcir_i2c_ts_suspend(struct device *dev)
 				goto unlock;
 			}
 		}
-
 	} else if (input->users) {
 		ret = pixcir_stop(ts);
 	}
@@ -401,6 +397,7 @@ static int __maybe_unused pixcir_i2c_ts_resume(struct device *dev)
 	mutex_lock(&input->mutex);
 
 	if (device_may_wakeup(&client->dev)) {
+
 		if (!input->users) {
 			ret = pixcir_stop(ts);
 			if (ret) {
@@ -545,13 +542,6 @@ static int pixcir_i2c_ts_probe(struct i2c_client *client,
 		return error;
 	}
 
-	tsdata->wakeirq = of_irq_get(dev->of_node, 1);
-	if (tsdata->wakeirq < 0 && tsdata->wakeirq != -ENODATA &&
-	    tsdata->wakeirq != -EINVAL) {
-		dev_err(dev, "Failed to get wakeirq\n");
-		return tsdata->wakeirq;
-	}
-
 	pixcir_reset(tsdata);
 
 	/* Always be in IDLE mode to save power, device supports auto wake */
@@ -571,23 +561,6 @@ static int pixcir_i2c_ts_probe(struct i2c_client *client,
 		return error;
 
 	i2c_set_clientdata(client, tsdata);
-	device_init_wakeup(&client->dev, 1);
-
-	/* Register wakeirq */
-	error = (tsdata->wakeirq > 0) ?
-		dev_pm_set_dedicated_wake_irq(dev, tsdata->wakeirq) :
-		dev_pm_set_wake_irq(dev, client->irq);
-	if (error)
-		dev_info(dev, "unable to setup wakeirq %d\n",
-			 error);
-
-	return 0;
-}
-
-static int pixcir_i2c_ts_remove(struct i2c_client *client)
-{
-	dev_pm_clear_wake_irq(&client->dev);
-	device_init_wakeup(&client->dev, 0);
 
 	return 0;
 }
@@ -620,13 +593,11 @@ MODULE_DEVICE_TABLE(of, pixcir_of_match);
 
 static struct i2c_driver pixcir_i2c_ts_driver = {
 	.driver = {
-		.owner	= THIS_MODULE,
 		.name	= "pixcir_ts",
 		.pm	= &pixcir_dev_pm_ops,
 		.of_match_table = of_match_ptr(pixcir_of_match),
 	},
 	.probe		= pixcir_i2c_ts_probe,
-	.remove		= pixcir_i2c_ts_remove,
 	.id_table	= pixcir_i2c_ts_id,
 };
 

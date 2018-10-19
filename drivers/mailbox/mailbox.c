@@ -26,8 +26,6 @@
 static LIST_HEAD(mbox_cons);
 static DEFINE_MUTEX(con_mutex);
 
-static void poll_txdone(unsigned long data);
-
 static int add_to_rbuf(struct mbox_chan *chan, void *mssg)
 {
 	int idx;
@@ -88,7 +86,9 @@ exit:
 	spin_unlock_irqrestore(&chan->lock, flags);
 
 	if (!err && (chan->txdone_method & TXDONE_BY_POLL))
-		poll_txdone((unsigned long)chan->mbox);
+		/* kick start the timer immediately to avoid delays */
+		hrtimer_start(&chan->mbox->poll_hrt, ktime_set(0, 0),
+			      HRTIMER_MODE_REL);
 }
 
 static void tx_tick(struct mbox_chan *chan, int r)
@@ -104,17 +104,21 @@ static void tx_tick(struct mbox_chan *chan, int r)
 	/* Submit next message */
 	msg_submit(chan);
 
+	if (!mssg)
+		return;
+
 	/* Notify the client */
-	if (mssg && chan->cl->tx_done)
+	if (chan->cl->tx_done)
 		chan->cl->tx_done(chan->cl, mssg, r);
 
-	if (chan->cl->tx_block)
+	if (r != -ETIME && chan->cl->tx_block)
 		complete(&chan->tx_complete);
 }
 
-static void poll_txdone(unsigned long data)
+static enum hrtimer_restart txdone_hrtimer(struct hrtimer *hrtimer)
 {
-	struct mbox_controller *mbox = (struct mbox_controller *)data;
+	struct mbox_controller *mbox =
+		container_of(hrtimer, struct mbox_controller, poll_hrt);
 	bool txdone, resched = false;
 	int i;
 
@@ -130,9 +134,11 @@ static void poll_txdone(unsigned long data)
 		}
 	}
 
-	if (resched)
-		mod_timer(&mbox->poll, jiffies +
-				msecs_to_jiffies(mbox->txpoll_period));
+	if (resched) {
+		hrtimer_forward_now(hrtimer, ms_to_ktime(mbox->txpoll_period));
+		return HRTIMER_RESTART;
+	}
+	return HRTIMER_NORESTART;
 }
 
 /**
@@ -258,7 +264,7 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 
 	msg_submit(chan);
 
-	if (chan->cl->tx_block && chan->active_req) {
+	if (chan->cl->tx_block) {
 		unsigned long wait;
 		int ret;
 
@@ -269,8 +275,8 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 
 		ret = wait_for_completion_timeout(&chan->tx_complete, wait);
 		if (ret == 0) {
-			t = -EIO;
-			tx_tick(chan, -EIO);
+			t = -ETIME;
+			tx_tick(chan, t);
 		}
 	}
 
@@ -451,9 +457,9 @@ int mbox_controller_register(struct mbox_controller *mbox)
 		txdone = TXDONE_BY_ACK;
 
 	if (txdone == TXDONE_BY_POLL) {
-		mbox->poll.function = &poll_txdone;
-		mbox->poll.data = (unsigned long)mbox;
-		init_timer(&mbox->poll);
+		hrtimer_init(&mbox->poll_hrt, CLOCK_MONOTONIC,
+			     HRTIMER_MODE_REL);
+		mbox->poll_hrt.function = txdone_hrtimer;
 	}
 
 	for (i = 0; i < mbox->num_chans; i++) {
@@ -495,7 +501,7 @@ void mbox_controller_unregister(struct mbox_controller *mbox)
 		mbox_free_channel(&mbox->chans[i]);
 
 	if (mbox->txdone_poll)
-		del_timer_sync(&mbox->poll);
+		hrtimer_cancel(&mbox->poll_hrt);
 
 	mutex_unlock(&con_mutex);
 }

@@ -63,8 +63,11 @@ static void mlx4_add_device(struct mlx4_interface *intf, struct mlx4_priv *priv)
 		spin_lock_irq(&priv->ctx_lock);
 		list_add_tail(&dev_ctx->list, &priv->ctx_list);
 		spin_unlock_irq(&priv->ctx_lock);
+		if (intf->activate)
+			intf->activate(&priv->dev, dev_ctx->context);
 	} else
 		kfree(dev_ctx);
+
 }
 
 static void mlx4_remove_device(struct mlx4_interface *intf, struct mlx4_priv *priv)
@@ -215,6 +218,18 @@ void mlx4_unregister_device(struct mlx4_dev *dev)
 	struct mlx4_interface *intf;
 
 	mlx4_stop_catas_poll(dev);
+	if (dev->persist->interface_state & MLX4_INTERFACE_STATE_DELETION &&
+	    mlx4_is_slave(dev)) {
+		/* In mlx4_remove_one on a VF */
+		u32 slave_read =
+			swab32(readl(&mlx4_priv(dev)->mfunc.comm->slave_read));
+
+		if (mlx4_comm_internal_err(slave_read)) {
+			mlx4_dbg(dev, "%s: comm channel is down, entering error state.\n",
+				 __func__);
+			mlx4_enter_error_state(dev->persist);
+		}
+	}
 	mutex_lock(&intf_mutex);
 
 	list_for_each_entry(intf, &intf_list, list)

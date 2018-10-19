@@ -24,6 +24,13 @@
 		display0 = &lcd0;
 	};
 
+	/* fixed 32k external oscillator clock */
+	clk_32k_rtc: clk_32k_rtc {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <32768>;
+	};
+
 	backlight {
 		compatible = "pwm-backlight";
 		pwms = <&ecap0 0 50000 PWM_POLARITY_INVERTED>;
@@ -35,10 +42,13 @@
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "AM437x-SK-EVM";
 		simple-audio-card,widgets =
-			"Headphone", "Headphone Jack";
+			"Headphone", "Headphone Jack",
+			"Line", "Line In";
 		simple-audio-card,routing =
 			"Headphone Jack",	"HPLOUT",
-			"Headphone Jack",	"HPROUT";
+			"Headphone Jack",	"HPROUT",
+			"LINE1L",		"Line In",
+			"LINE1R",		"Line In";
 		simple-audio-card,format = "dsp_b";
 		simple-audio-card,bitclock-master = <&sound_master>;
 		simple-audio-card,frame-master = <&sound_master>;
@@ -242,12 +252,6 @@
 		>;
 	};
 
-	clkout1_pin: pinmux_clkout1_pin {
-		pinctrl-single,pins = <
-			0x270 (PIN_OUTPUT_PULLDOWN | MUX_MODE3)	/* XDMA_EVENT_INTR0/CLKOUT1 */
-		>;
-	};
-
 	cpsw_default: cpsw_default {
 		pinctrl-single,pins = <
 			/* Slave 1 */
@@ -382,6 +386,15 @@
 		>;
 	};
 
+	mcasp1_pins_sleep: mcasp1_pins_sleep {
+		pinctrl-single,pins = <
+			0x10c (PIN_INPUT_PULLDOWN | MUX_MODE7)
+			0x110 (PIN_INPUT_PULLDOWN | MUX_MODE7)
+			0x108 (PIN_INPUT_PULLDOWN | MUX_MODE7)
+			0x144 (PIN_INPUT_PULLDOWN | MUX_MODE7)
+		>;
+	};
+
 	lcd_pins: lcd_pins {
 		pinctrl-single,pins = <
 			0x1c (PIN_OUTPUT_PULLDOWN | MUX_MODE7) /* gpcm_ad7.gpio1_7 */
@@ -405,7 +418,7 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c0_pins>;
-	clock-frequency = <100000>;
+	clock-frequency = <400000>;
 
 	tps@24 {
 		compatible = "ti,tps65218";
@@ -441,12 +454,6 @@
 			regulator-max-microvolt = <1500000>;
 			regulator-boot-on;
 			regulator-always-on;
-			regulator-state-mem {
-				regulator-on-in-suspend;
-			};
-			regulator-state-disk {
-				regulator-off-in-suspend;
-			};
 		};
 
 		dcdc4: regulator-dcdc4 {
@@ -456,30 +463,6 @@
 			regulator-max-microvolt = <3300000>;
 			regulator-boot-on;
 			regulator-always-on;
-		};
-
-		dcdc5: regulator-dcdc5 {
-			compatible = "ti,tps65218-dcdc5";
-			regulator-name = "v1_0bat";
-			regulator-min-microvolt = <1000000>;
-			regulator-max-microvolt = <1000000>;
-			regulator-boot-on;
-			regulator-always-on;
-			regulator-state-mem {
-				regulator-on-in-suspend;
-			};
-		};
-
-		dcdc6: regulator-dcdc6 {
-			compatible = "ti,tps65218-dcdc6";
-			regulator-name = "v1_8bat";
-			regulator-min-microvolt = <1800000>;
-			regulator-max-microvolt = <1800000>;
-			regulator-boot-on;
-			regulator-always-on;
-			regulator-state-mem {
-				regulator-on-in-suspend;
-			};
 		};
 
 		ldo1: regulator-ldo1 {
@@ -511,25 +494,6 @@
 	pinctrl-0 = <&i2c1_pins>;
 	clock-frequency = <400000>;
 
-	ov2659@30 {
-		compatible = "ovti,ov2659";
-		reg = <0x30>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&clkout1_pin>;
-
-		clocks = <&clkout1_mux_ck>;
-		clock-names = "xvclk";
-		assigned-clocks = <&clkout1_mux_ck>;
-		assigned-clock-parents = <&clkout1_osc_div_ck>;
-
-		port {
-			ov2659_1: endpoint {
-				remote-endpoint = <&vpfe0_ep>;
-				link-frequencies = /bits/ 64 <70000000>;
-			};
-		};
-	};
-
 	edt-ft5306@38 {
 		status = "okay";
 		compatible = "edt,edt-ft5306", "edt,edt-ft5x06";
@@ -538,7 +502,7 @@
 
 		reg = <0x38>;
 		interrupt-parent = <&gpio0>;
-		interrupts = <31 0>;
+		interrupts = <31 IRQ_TYPE_EDGE_FALLING>;
 
 		reset-gpios = <&gpio1 28 GPIO_ACTIVE_LOW>;
 
@@ -599,7 +563,7 @@
 
 	vmmc-supply = <&dcdc4>;
 	bus-width = <4>;
-	cd-gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+	cd-gpios = <&gpio0 6 GPIO_ACTIVE_LOW>;
 };
 
 &usb2_phy1 {
@@ -607,7 +571,7 @@
 };
 
 &usb1 {
-	dr_mode = "otg";
+	dr_mode = "peripheral";
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&usb1_pins>;
@@ -709,8 +673,9 @@
 
 &mcasp1 {
 	#sound-dai-cells = <0>;
-	pinctrl-names = "default";
+	pinctrl-names = "default", "sleep";
 	pinctrl-0 = <&mcasp1_pins>;
+	pinctrl-1 = <&mcasp1_pins_sleep>;
 
 	status = "okay";
 
@@ -739,8 +704,9 @@
 };
 
 &rtc {
+	clocks = <&clk_32k_rtc>, <&clk_32768_ck>;
+	clock-names = "ext-clk", "int-clk";
 	status = "okay";
-	ext-clk-src;
 };
 
 &wdt {
@@ -760,19 +726,11 @@
 	/* Camera port */
 	port {
 		vpfe0_ep: endpoint {
-			remote-endpoint = <&ov2659_1>;
+			/* remote-endpoint = <&sensor>; add once we have it */
 			ti,am437x-vpfe-interface = <0>;
 			bus-width = <8>;
 			hsync-active = <0>;
 			vsync-active = <0>;
 		};
 	};
-};
-
-&wkup_m3_ipc {
-	ti,scale-data-fw = "am43x-evm-scale-data.bin";
-};
-
-&sgx {
-	status = "okay";
 };

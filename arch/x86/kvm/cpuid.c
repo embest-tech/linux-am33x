@@ -16,21 +16,21 @@
 #include <linux/module.h>
 #include <linux/vmalloc.h>
 #include <linux/uaccess.h>
-#include <asm/i387.h> /* For use_eager_fpu.  Ugh! */
-#include <asm/fpu-internal.h> /* For use_eager_fpu.  Ugh! */
+#include <asm/fpu/internal.h> /* For use_eager_fpu.  Ugh! */
 #include <asm/user.h>
-#include <asm/xsave.h>
+#include <asm/fpu/xstate.h>
 #include "cpuid.h"
 #include "lapic.h"
 #include "mmu.h"
 #include "trace.h"
+#include "pmu.h"
 
 static u32 xstate_required_size(u64 xstate_bv, bool compacted)
 {
 	int feature_bit = 0;
 	u32 ret = XSAVE_HDR_SIZE + XSAVE_HDR_OFFSET;
 
-	xstate_bv &= XSTATE_EXTEND_MASK;
+	xstate_bv &= XFEATURE_MASK_EXTEND;
 	while (xstate_bv) {
 		if (xstate_bv & 0x1) {
 		        u32 eax, ebx, ecx, edx, offset;
@@ -46,12 +46,19 @@ static u32 xstate_required_size(u64 xstate_bv, bool compacted)
 	return ret;
 }
 
+bool kvm_mpx_supported(void)
+{
+	return ((host_xcr0 & (XFEATURE_MASK_BNDREGS | XFEATURE_MASK_BNDCSR))
+		 && kvm_x86_ops->mpx_supported());
+}
+EXPORT_SYMBOL_GPL(kvm_mpx_supported);
+
 u64 kvm_supported_xcr0(void)
 {
 	u64 xcr0 = KVM_SUPPORTED_XCR0 & host_xcr0;
 
-	if (!kvm_x86_ops->mpx_supported())
-		xcr0 &= ~(XSTATE_BNDREGS | XSTATE_BNDCSR);
+	if (!kvm_mpx_supported())
+		xcr0 &= ~(XFEATURE_MASK_BNDREGS | XFEATURE_MASK_BNDCSR);
 
 	return xcr0;
 }
@@ -97,7 +104,9 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
 	if (best && (best->eax & (F(XSAVES) | F(XSAVEC))))
 		best->ebx = xstate_required_size(vcpu->arch.xcr0, true);
 
-	vcpu->arch.eager_fpu = guest_cpuid_has_mpx(vcpu);
+	vcpu->arch.eager_fpu = use_eager_fpu();
+	if (vcpu->arch.eager_fpu)
+		kvm_x86_ops->fpu_activate(vcpu);
 
 	/*
 	 * The existing code assumes virtual address is 48-bit in the canonical
@@ -111,7 +120,7 @@ int kvm_update_cpuid(struct kvm_vcpu *vcpu)
 	/* Update physical-address width */
 	vcpu->arch.maxphyaddr = cpuid_query_maxphyaddr(vcpu);
 
-	kvm_pmu_cpuid_update(vcpu);
+	kvm_pmu_refresh(vcpu);
 	return 0;
 }
 
@@ -293,7 +302,7 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
 #endif
 	unsigned f_rdtscp = kvm_x86_ops->rdtscp_supported() ? F(RDTSCP) : 0;
 	unsigned f_invpcid = kvm_x86_ops->invpcid_supported() ? F(INVPCID) : 0;
-	unsigned f_mpx = kvm_x86_ops->mpx_supported() ? F(MPX) : 0;
+	unsigned f_mpx = kvm_mpx_supported() ? F(MPX) : 0;
 	unsigned f_xsaves = kvm_x86_ops->xsaves_supported() ? F(XSAVES) : 0;
 
 	/* cpuid 1.edx */
@@ -346,7 +355,7 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
 		F(FSGSBASE) | F(BMI1) | F(HLE) | F(AVX2) | F(SMEP) |
 		F(BMI2) | F(ERMS) | f_invpcid | F(RTM) | f_mpx | F(RDSEED) |
 		F(ADX) | F(SMAP) | F(AVX512F) | F(AVX512PF) | F(AVX512ER) |
-		F(AVX512CD);
+		F(AVX512CD) | F(CLFLUSHOPT) | F(CLWB) | F(PCOMMIT);
 
 	/* cpuid 0xD.1.eax */
 	const u32 kvm_supported_word10_x86_features =
@@ -415,6 +424,12 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
 		}
 		break;
 	}
+	case 6: /* Thermal management */
+		entry->eax = 0x4; /* allow ARAT */
+		entry->ebx = 0;
+		entry->ecx = 0;
+		entry->edx = 0;
+		break;
 	case 7: {
 		entry->flags |= KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
 		/* Mask ebx against host capability word 9 */
@@ -501,6 +516,7 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
 			do_cpuid_1_ent(&entry[i], function, idx);
 			if (idx == 1) {
 				entry[i].eax &= kvm_supported_word10_x86_features;
+				cpuid_mask(&entry[i].eax, 10);
 				entry[i].ebx = 0;
 				if (entry[i].eax & (F(XSAVES)|F(XSAVEC)))
 					entry[i].ebx =
@@ -591,7 +607,6 @@ static inline int __do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 function,
 		break;
 	case 3: /* Processor serial number */
 	case 5: /* MONITOR/MWAIT */
-	case 6: /* Thermal management */
 	case 0xC0000002:
 	case 0xC0000003:
 	case 0xC0000004:
@@ -729,18 +744,20 @@ out:
 static int move_to_next_stateful_cpuid_entry(struct kvm_vcpu *vcpu, int i)
 {
 	struct kvm_cpuid_entry2 *e = &vcpu->arch.cpuid_entries[i];
-	int j, nent = vcpu->arch.cpuid_nent;
+	struct kvm_cpuid_entry2 *ej;
+	int j = i;
+	int nent = vcpu->arch.cpuid_nent;
 
 	e->flags &= ~KVM_CPUID_FLAG_STATE_READ_NEXT;
 	/* when no next entry is found, the current entry[i] is reselected */
-	for (j = i + 1; ; j = (j + 1) % nent) {
-		struct kvm_cpuid_entry2 *ej = &vcpu->arch.cpuid_entries[j];
-		if (ej->function == e->function) {
-			ej->flags |= KVM_CPUID_FLAG_STATE_READ_NEXT;
-			return j;
-		}
-	}
-	return 0; /* silence gcc, even though control never reaches here */
+	do {
+		j = (j + 1) % nent;
+		ej = &vcpu->arch.cpuid_entries[j];
+	} while (ej->function != e->function);
+
+	ej->flags |= KVM_CPUID_FLAG_STATE_READ_NEXT;
+
+	return j;
 }
 
 /* find an entry with matching function, matching index (if needed), and that
@@ -809,12 +826,6 @@ void kvm_cpuid(struct kvm_vcpu *vcpu, u32 *eax, u32 *ebx, u32 *ecx, u32 *edx)
 
 	if (!best)
 		best = check_cpuid_limit(vcpu, function, index);
-
-	/*
-	 * Perfmon not yet supported for L2 guest.
-	 */
-	if (is_guest_mode(vcpu) && function == 0xa)
-		best = NULL;
 
 	if (best) {
 		*eax = best->eax;

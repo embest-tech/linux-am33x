@@ -2,8 +2,8 @@
 #define _PARISC_DMA_MAPPING_H
 
 #include <linux/mm.h>
+#include <linux/scatterlist.h>
 #include <asm/cacheflush.h>
-#include <asm/scatterlist.h>
 
 /* See Documentation/DMA-API-HOWTO.txt */
 struct hppa_dma_ops {
@@ -38,6 +38,8 @@ struct hppa_dma_ops {
 ** categories will need to modify the needed drivers to perform
 ** flush/purge and allocate "regular" cacheable pages for everything.
 */
+
+#define DMA_ERROR_CODE	(~(dma_addr_t)0)
 
 #ifdef CONFIG_PA11
 extern struct hppa_dma_ops pcxl_dma_ops;
@@ -209,12 +211,13 @@ parisc_walk_tree(struct device *dev)
 			break;
 		}
 	}
-	BUG_ON(!dev->platform_data);
 	return dev->platform_data;
 }
-		
-#define GET_IOC(dev) (HBA_DATA(parisc_walk_tree(dev))->iommu)
-	
+
+#define GET_IOC(dev) ({					\
+	void *__pdata = parisc_walk_tree(dev);		\
+	__pdata ? HBA_DATA(__pdata)->iommu : NULL;	\
+})
 
 #ifdef CONFIG_IOMMU_CCIO
 struct parisc_device;

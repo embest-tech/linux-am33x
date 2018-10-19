@@ -127,7 +127,7 @@ struct pinctrl_ops {
  */
 struct pinctrl_desc {
 	const char *name;
-	struct pinctrl_pin_desc const *pins;
+	const struct pinctrl_pin_desc *pins;
 	unsigned int npins;
 	const struct pinctrl_ops *pctlops;
 	const struct pinmux_ops *pmxops;
@@ -175,7 +175,6 @@ struct pinctrl_dev *of_pinctrl_get(struct device_node *np)
 extern const char *pinctrl_dev_get_name(struct pinctrl_dev *pctldev);
 extern const char *pinctrl_dev_get_devname(struct pinctrl_dev *pctldev);
 extern void *pinctrl_dev_get_drvdata(struct pinctrl_dev *pctldev);
-extern struct pinctrl_dev *get_pinctrl_dev_from_devname(const char *dev_name);
 #else
 
 struct pinctrl_dev;
@@ -184,12 +183,6 @@ struct pinctrl_dev;
 static inline bool pin_is_valid(struct pinctrl_dev *pctldev, int pin)
 {
 	return pin >= 0;
-}
-
-static inline struct pinctrl_dev *get_pinctrl_dev_from_devname(
-							const char *dev_name)
-{
-	return NULL;
 }
 
 #endif /* !CONFIG_PINCTRL */

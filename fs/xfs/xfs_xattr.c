@@ -32,9 +32,10 @@
 
 
 static int
-xfs_xattr_get(struct dentry *dentry, const char *name,
-		void *value, size_t size, int xflags)
+xfs_xattr_get(const struct xattr_handler *handler, struct dentry *dentry,
+		const char *name, void *value, size_t size)
 {
+	int xflags = handler->flags;
 	struct xfs_inode *ip = XFS_I(d_inode(dentry));
 	int error, asize = size;
 
@@ -53,11 +54,35 @@ xfs_xattr_get(struct dentry *dentry, const char *name,
 	return asize;
 }
 
-static int
-xfs_xattr_set(struct dentry *dentry, const char *name, const void *value,
-		size_t size, int flags, int xflags)
+void
+xfs_forget_acl(
+	struct inode		*inode,
+	const char		*name,
+	int			xflags)
 {
-	struct xfs_inode *ip = XFS_I(d_inode(dentry));
+	/*
+	 * Invalidate any cached ACLs if the user has bypassed the ACL
+	 * interface. We don't validate the content whatsoever so it is caller
+	 * responsibility to provide data in valid format and ensure i_mode is
+	 * consistent.
+	 */
+	if (xflags & ATTR_ROOT) {
+#ifdef CONFIG_XFS_POSIX_ACL
+		if (!strcmp(name, SGI_ACL_FILE))
+			forget_cached_acl(inode, ACL_TYPE_ACCESS);
+		else if (!strcmp(name, SGI_ACL_DEFAULT))
+			forget_cached_acl(inode, ACL_TYPE_DEFAULT);
+#endif
+	}
+}
+
+static int
+xfs_xattr_set(const struct xattr_handler *handler, struct dentry *dentry,
+		const char *name, const void *value, size_t size, int flags)
+{
+	int			xflags = handler->flags;
+	struct xfs_inode	*ip = XFS_I(d_inode(dentry));
+	int			error;
 
 	if (strcmp(name, "") == 0)
 		return -EINVAL;
@@ -70,8 +95,12 @@ xfs_xattr_set(struct dentry *dentry, const char *name, const void *value,
 
 	if (!value)
 		return xfs_attr_remove(ip, (unsigned char *)name, xflags);
-	return xfs_attr_set(ip, (unsigned char *)name,
+	error = xfs_attr_set(ip, (unsigned char *)name,
 				(void *)value, size, xflags);
+	if (!error)
+		xfs_forget_acl(d_inode(dentry), name, xflags);
+
+	return error;
 }
 
 static const struct xattr_handler xfs_xattr_user_handler = {
@@ -151,7 +180,8 @@ xfs_xattr_put_listent(
 	arraytop = context->count + prefix_len + namelen + 1;
 	if (arraytop > context->firstu) {
 		context->count = -1;	/* insufficient space */
-		return 1;
+		context->seen_enough = 1;
+		return 0;
 	}
 	offset = (char *)context->alist + context->count;
 	strncpy(offset, xfs_xattr_prefix(flags), prefix_len);
@@ -193,12 +223,15 @@ list_one_attr(const char *name, const size_t len, void *data,
 }
 
 ssize_t
-xfs_vn_listxattr(struct dentry *dentry, char *data, size_t size)
+xfs_vn_listxattr(
+	struct dentry	*dentry,
+	char		*data,
+	size_t		size)
 {
 	struct xfs_attr_list_context context;
 	struct attrlist_cursor_kern cursor = { 0 };
-	struct inode		*inode = d_inode(dentry);
-	int			error;
+	struct inode	*inode = d_inode(dentry);
+	int		error;
 
 	/*
 	 * First read the regular on-disk attributes.
@@ -216,7 +249,9 @@ xfs_vn_listxattr(struct dentry *dentry, char *data, size_t size)
 	else
 		context.put_listent = xfs_xattr_put_listent_sizes;
 
-	xfs_attr_list_int(&context);
+	error = xfs_attr_list_int(&context);
+	if (error)
+		return error;
 	if (context.count < 0)
 		return -ERANGE;
 

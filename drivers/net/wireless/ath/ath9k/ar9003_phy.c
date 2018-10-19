@@ -926,19 +926,18 @@ static int ar9003_hw_process_ini(struct ath_hw *ah,
 		 */
 		if ((ar9003_hw_get_rx_gain_idx(ah) == 2) ||
 		    (ar9003_hw_get_rx_gain_idx(ah) == 3)) {
-			REG_WRITE_ARRAY(&ah->ini_modes_rxgain_5g_xlna,
+			REG_WRITE_ARRAY(&ah->ini_modes_rxgain_xlna,
 					modesIndex, regWrites);
 		}
-
-		if (AR_SREV_9561(ah) && (ar9003_hw_get_rx_gain_idx(ah) == 0))
-			REG_WRITE_ARRAY(&ah->ini_modes_rxgain_5g_xlna,
-					modesIndex, regWrites);
 	}
 
 	if (AR_SREV_9550(ah) || AR_SREV_9561(ah))
 		REG_WRITE_ARRAY(&ah->ini_modes_rx_gain_bounds, modesIndex,
 				regWrites);
 
+	if (AR_SREV_9561(ah) && (ar9003_hw_get_rx_gain_idx(ah) == 0))
+		REG_WRITE_ARRAY(&ah->ini_modes_rxgain_xlna,
+				modesIndex, regWrites);
 	/*
 	 * TXGAIN initvals.
 	 */
@@ -1816,8 +1815,6 @@ static void ar9003_hw_spectral_scan_wait(struct ath_hw *ah)
 static void ar9003_hw_tx99_start(struct ath_hw *ah, u32 qnum)
 {
 	REG_SET_BIT(ah, AR_PHY_TEST, PHY_AGC_CLR);
-	REG_SET_BIT(ah, 0x9864, 0x7f000);
-	REG_SET_BIT(ah, 0x9924, 0x7f00fe);
 	REG_CLR_BIT(ah, AR_DIAG_SW, AR_DIAG_RX_DIS);
 	REG_WRITE(ah, AR_CR, AR_CR_RXD);
 	REG_WRITE(ah, AR_DLCL_IFS(qnum), 0);

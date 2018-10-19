@@ -195,6 +195,16 @@ static int mxs_pinctrl_get_func_groups(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
+static void mxs_pinctrl_rmwl(u32 value, u32 mask, u8 shift, void __iomem *reg)
+{
+	u32 tmp;
+
+	tmp = readl(reg);
+	tmp &= ~(mask << shift);
+	tmp |= value << shift;
+	writel(tmp, reg);
+}
+
 static int mxs_pinctrl_set_mux(struct pinctrl_dev *pctldev, unsigned selector,
 			       unsigned group)
 {
@@ -212,8 +222,7 @@ static int mxs_pinctrl_set_mux(struct pinctrl_dev *pctldev, unsigned selector,
 		reg += bank * 0x20 + pin / 16 * 0x10;
 		shift = pin % 16 * 2;
 
-		writel(0x3 << shift, reg + CLR);
-		writel(g->muxsel[i] << shift, reg + SET);
+		mxs_pinctrl_rmwl(g->muxsel[i], 0x3, shift, reg);
 	}
 
 	return 0;
@@ -280,8 +289,7 @@ static int mxs_pinconf_group_set(struct pinctrl_dev *pctldev,
 			/* mA */
 			if (config & MA_PRESENT) {
 				shift = pin % 8 * 4;
-				writel(0x3 << shift, reg + CLR);
-				writel(ma << shift, reg + SET);
+				mxs_pinctrl_rmwl(ma, 0x3, shift, reg);
 			}
 
 			/* vol */
@@ -474,7 +482,7 @@ static int mxs_pinctrl_probe_dt(struct platform_device *pdev,
 			f->name = fn = child->name;
 		}
 		f->ngroups++;
-	};
+	}
 
 	/* Get groups for each function */
 	idxf = 0;
@@ -540,9 +548,9 @@ int mxs_pinctrl_probe(struct platform_device *pdev,
 	}
 
 	d->pctl = pinctrl_register(&mxs_pinctrl_desc, &pdev->dev, d);
-	if (!d->pctl) {
+	if (IS_ERR(d->pctl)) {
 		dev_err(&pdev->dev, "Couldn't register MXS pinctrl driver\n");
-		ret = -EINVAL;
+		ret = PTR_ERR(d->pctl);
 		goto err;
 	}
 

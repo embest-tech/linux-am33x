@@ -31,7 +31,7 @@
 static u8 ti_clk_mux_get_parent(struct clk_hw *hw)
 {
 	struct clk_mux *mux = to_clk_mux(hw);
-	int num_parents = __clk_get_num_parents(hw->clk);
+	int num_parents = clk_hw_get_num_parents(hw);
 	u32 val;
 
 	/*
@@ -69,7 +69,6 @@ static int ti_clk_mux_set_parent(struct clk_hw *hw, u8 index)
 {
 	struct clk_mux *mux = to_clk_mux(hw);
 	u32 val;
-	unsigned long flags = 0;
 
 	if (mux->table) {
 		index = mux->table[index];
@@ -81,9 +80,6 @@ static int ti_clk_mux_set_parent(struct clk_hw *hw, u8 index)
 			index++;
 	}
 
-	if (mux->lock)
-		spin_lock_irqsave(mux->lock, flags);
-
 	if (mux->flags & CLK_MUX_HIWORD_MASK) {
 		val = mux->mask << (mux->shift + 16);
 	} else {
@@ -93,53 +89,20 @@ static int ti_clk_mux_set_parent(struct clk_hw *hw, u8 index)
 	val |= index << mux->shift;
 	ti_clk_ll_ops->clk_writel(val, mux->reg);
 
-	if (mux->lock)
-		spin_unlock_irqrestore(mux->lock, flags);
-
 	return 0;
-}
-
-/**
- * clk_mux_save_context - Save the parent selcted in the mux
- * @hw: pointer  struct clk_hw
- *
- * Save the parent mux value.
- */
-static int clk_mux_save_context(struct clk_hw *hw)
-{
-	struct clk_mux *mux = to_clk_mux(hw);
-
-	mux->saved_parent = ti_clk_mux_get_parent(hw);
-	return 0;
-}
-
-/**
- * clk_mux_restore_context - Restore the parent in the mux
- * @hw: pointer  struct clk_hw
- *
- * Restore the saved parent mux value.
- */
-static void clk_mux_restore_context(struct clk_hw *hw)
-{
-	struct clk_mux *mux = to_clk_mux(hw);
-
-	ti_clk_mux_set_parent(hw, mux->saved_parent);
 }
 
 const struct clk_ops ti_clk_mux_ops = {
 	.get_parent = ti_clk_mux_get_parent,
 	.set_parent = ti_clk_mux_set_parent,
 	.determine_rate = __clk_mux_determine_rate,
-	.save_context = clk_mux_save_context,
-	.restore_context = clk_mux_restore_context,
-
 };
 
 static struct clk *_register_mux(struct device *dev, const char *name,
 				 const char **parent_names, u8 num_parents,
 				 unsigned long flags, void __iomem *reg,
 				 u8 shift, u32 mask, u8 clk_mux_flags,
-				 u32 *table, spinlock_t *lock)
+				 u32 *table)
 {
 	struct clk_mux *mux;
 	struct clk *clk;
@@ -163,7 +126,6 @@ static struct clk *_register_mux(struct device *dev, const char *name,
 	mux->shift = shift;
 	mux->mask = mask;
 	mux->flags = clk_mux_flags;
-	mux->lock = lock;
 	mux->table = table;
 	mux->hw.init = &init;
 
@@ -205,7 +167,7 @@ struct clk *ti_clk_register_mux(struct ti_clk *setup)
 
 	return _register_mux(NULL, setup->name, mux->parents, mux->num_parents,
 			     flags, (void __iomem *)reg, mux->bit_shift, mask,
-			     mux_flags, NULL, NULL);
+			     mux_flags, NULL);
 }
 
 /**
@@ -220,7 +182,6 @@ static void of_mux_clk_setup(struct device_node *node)
 	void __iomem *reg;
 	int num_parents;
 	const char **parent_names;
-	int i;
 	u8 clk_mux_flags = 0;
 	u32 mask = 0;
 	u32 shift = 0;
@@ -235,8 +196,7 @@ static void of_mux_clk_setup(struct device_node *node)
 	if (!parent_names)
 		goto cleanup;
 
-	for (i = 0; i < num_parents; i++)
-		parent_names[i] = of_clk_get_parent_name(node, i);
+	of_clk_parent_fill(node, parent_names, num_parents);
 
 	reg = ti_clk_get_reg_addr(node, 0);
 
@@ -259,8 +219,7 @@ static void of_mux_clk_setup(struct device_node *node)
 	mask = (1 << fls(mask)) - 1;
 
 	clk = _register_mux(NULL, node->name, parent_names, num_parents,
-			    flags, reg, shift, mask, clk_mux_flags, NULL,
-			    NULL);
+			    flags, reg, shift, mask, clk_mux_flags, NULL);
 
 	if (!IS_ERR(clk))
 		of_clk_add_provider(node, of_clk_src_simple_get, clk);

@@ -26,7 +26,6 @@
 #endif
 
 #include <asm/cputype.h>
-#include <asm/system_info.h>
 
 #include "common.h"
 
@@ -34,8 +33,6 @@
 
 #include "soc.h"
 #include "control.h"
-
-#define MAC_ID0_reg						0x630
 
 #define OMAP4_SILICON_TYPE_STANDARD		0x01
 #define OMAP4_SILICON_TYPE_PERFORMANCE		0x02
@@ -60,15 +57,15 @@ int omap_type(void)
 	if (val < OMAP2_DEVICETYPE_MASK)
 		return val;
 
-	if (cpu_is_omap24xx()) {
+	if (soc_is_omap24xx()) {
 		val = omap_ctrl_readl(OMAP24XX_CONTROL_STATUS);
-	} else if (cpu_is_ti81xx()) {
+	} else if (soc_is_ti81xx()) {
 		val = omap_ctrl_readl(TI81XX_CONTROL_STATUS);
 	} else if (soc_is_am33xx() || soc_is_am43xx()) {
 		val = omap_ctrl_readl(AM33XX_CONTROL_STATUS);
-	} else if (cpu_is_omap34xx()) {
+	} else if (soc_is_omap34xx()) {
 		val = omap_ctrl_readl(OMAP343X_CONTROL_STATUS);
-	} else if (cpu_is_omap44xx()) {
+	} else if (soc_is_omap44xx()) {
 		val = omap_ctrl_readl(OMAP4_CTRL_MODULE_CORE_STATUS);
 	} else if (soc_is_omap54xx() || soc_is_dra7xx()) {
 		val = omap_ctrl_readl(OMAP5XXX_CONTROL_STATUS);
@@ -125,7 +122,7 @@ static u16 tap_prod_id;
 
 void omap_get_die_id(struct omap_die_id *odi)
 {
-	if (cpu_is_omap44xx() || soc_is_omap54xx() || soc_is_dra7xx()) {
+	if (soc_is_omap44xx() || soc_is_omap54xx() || soc_is_dra7xx()) {
 		odi->id_0 = read_tap_reg(OMAP_TAP_DIE_ID_44XX_0);
 		odi->id_1 = read_tap_reg(OMAP_TAP_DIE_ID_44XX_1);
 		odi->id_2 = read_tap_reg(OMAP_TAP_DIE_ID_44XX_2);
@@ -221,19 +218,17 @@ static void __init omap3_cpuinfo(void)
 	 * on available features. Upon detection, update the CPU id
 	 * and CPU class bits.
 	 */
-	if (cpu_is_omap3630()) {
+	if (soc_is_omap3630()) {
 		cpu_name = "OMAP3630";
 	} else if (soc_is_am35xx()) {
 		cpu_name = (omap3_has_sgx()) ? "AM3517" : "AM3505";
-	} else if (cpu_is_ti816x()) {
+	} else if (soc_is_ti816x()) {
 		cpu_name = "TI816X";
 	} else if (soc_is_am335x()) {
 		cpu_name =  "AM335X";
 	} else if (soc_is_am437x()) {
 		cpu_name =  "AM437x";
-	} else if (soc_is_am438x()) {
-		cpu_name =  "AM438X";
-	} else if (cpu_is_ti814x()) {
+	} else if (soc_is_ti814x()) {
 		cpu_name = "TI814X";
 	} else if (omap3_has_iva() && omap3_has_sgx()) {
 		/* OMAP3430, OMAP3525, OMAP3515, OMAP3503 devices */
@@ -280,11 +275,11 @@ void __init omap3xxx_check_features(void)
 	OMAP3_CHECK_FEATURE(status, SGX);
 	OMAP3_CHECK_FEATURE(status, NEON);
 	OMAP3_CHECK_FEATURE(status, ISP);
-	if (cpu_is_omap3630())
+	if (soc_is_omap3630())
 		omap_features |= OMAP3_HAS_192MHZ_CLK;
-	if (cpu_is_omap3430() || cpu_is_omap3630())
+	if (soc_is_omap3430() || soc_is_omap3630())
 		omap_features |= OMAP3_HAS_IO_WAKEUP;
-	if (cpu_is_omap3630() || omap_rev() == OMAP3430_REV_ES3_1 ||
+	if (soc_is_omap3630() || omap_rev() == OMAP3430_REV_ES3_1 ||
 	    omap_rev() == OMAP3430_REV_ES3_1_2)
 		omap_features |= OMAP3_HAS_IO_CHAIN_CTRL;
 
@@ -706,7 +701,7 @@ void __init omap2_set_globals_tap(u32 class, void __iomem *tap)
 	tap_base = tap;
 
 	/* XXX What is this intended to do? */
-	if (cpu_is_omap34xx())
+	if (soc_is_omap34xx())
 		tap_prod_id = 0x0210;
 	else
 		tap_prod_id = 0x0208;
@@ -724,11 +719,11 @@ static const char * const omap_types[] = {
 
 static const char * __init omap_get_family(void)
 {
-	if (cpu_is_omap24xx())
+	if (soc_is_omap24xx())
 		return kasprintf(GFP_KERNEL, "OMAP2");
-	else if (cpu_is_omap34xx())
+	else if (soc_is_omap34xx())
 		return kasprintf(GFP_KERNEL, "OMAP3");
-	else if (cpu_is_omap44xx())
+	else if (soc_is_omap44xx())
 		return kasprintf(GFP_KERNEL, "OMAP4");
 	else if (soc_is_omap54xx())
 		return kasprintf(GFP_KERNEL, "OMAP5");
@@ -752,6 +747,8 @@ static ssize_t omap_get_type(struct device *dev,
 static struct device_attribute omap_soc_attr =
 	__ATTR(type,  S_IRUGO, omap_get_type,  NULL);
 
+#define MAC_ID0_reg				0x630
+
 void __init omap_soc_device_init(void)
 {
 	struct device *parent;
@@ -765,6 +762,7 @@ void __init omap_soc_device_init(void)
 	soc_dev_attr->machine  = soc_name;
 	soc_dev_attr->family   = omap_get_family();
 	soc_dev_attr->revision = soc_rev;
+
 	if (soc_is_am33xx() || soc_is_am335x()) {
 		void __iomem *p = ioremap(AM33XX_SCM_BASE + MAC_ID0_reg, 4 * sizeof(int));
 		if (p != NULL) {
@@ -772,8 +770,6 @@ void __init omap_soc_device_init(void)
 				readl(p + 4), readl(p),
 				readl(p + 12), readl(p + 8));
 			iounmap(p);
-
-			system_serial = soc_dev_attr->soc_id;
 		}
 	}
 

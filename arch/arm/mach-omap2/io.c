@@ -37,7 +37,6 @@
 #include "clock.h"
 #include "clock2xxx.h"
 #include "clock3xxx.h"
-#include "clock44xx.h"
 #include "omap-pm.h"
 #include "sdrc.h"
 #include "control.h"
@@ -49,7 +48,6 @@
 #include "cm44xx.h"
 #include "prm.h"
 #include "cm.h"
-#include "pm.h"
 #include "prcm_mpu44xx.h"
 #include "prminst44xx.h"
 #include "prm2xxx.h"
@@ -370,6 +368,7 @@ void __init omap5_map_io(void)
 void __init dra7xx_map_io(void)
 {
 	iotable_init(dra7xx_io_desc, ARRAY_SIZE(dra7xx_io_desc));
+	omap_barriers_init();
 }
 #endif
 /*
@@ -611,11 +610,11 @@ void __init ti814x_init_early(void)
 	omap2_prcm_base_init();
 	omap3xxx_voltagedomains_init();
 	omap3xxx_powerdomains_init();
-	ti81xx_clockdomains_init();
-	ti81xx_hwmod_init();
+	ti814x_clockdomains_init();
+	dm814x_hwmod_init();
 	omap_hwmod_init_postsetup();
 	if (of_have_populated_dt())
-		omap_clk_soc_init = ti81xx_dt_clk_init;
+		omap_clk_soc_init = dm814x_dt_clk_init;
 }
 
 void __init ti816x_init_early(void)
@@ -628,11 +627,11 @@ void __init ti816x_init_early(void)
 	omap2_prcm_base_init();
 	omap3xxx_voltagedomains_init();
 	omap3xxx_powerdomains_init();
-	ti81xx_clockdomains_init();
-	ti81xx_hwmod_init();
+	ti816x_clockdomains_init();
+	dm816x_hwmod_init();
 	omap_hwmod_init_postsetup();
 	if (of_have_populated_dt())
-		omap_clk_soc_init = ti81xx_dt_clk_init;
+		omap_clk_soc_init = dm816x_dt_clk_init;
 }
 #endif
 
@@ -654,9 +653,7 @@ void __init am33xx_init_early(void)
 
 void __init am33xx_init_late(void)
 {
-	am33xx_opp_init();
 	omap_common_late_init();
-	amx3_common_pm_init();
 }
 #endif
 
@@ -679,10 +676,8 @@ void __init am43xx_init_early(void)
 
 void __init am43xx_init_late(void)
 {
-	am43xx_opp_init();
 	omap_common_late_init();
 	omap2_clk_enable_autoidle_all();
-	amx3_common_pm_init();
 }
 #endif
 
@@ -758,7 +753,6 @@ void __init dra7xx_init_early(void)
 
 void __init dra7xx_init_late(void)
 {
-	dra7xx_opp_init();
 	omap_common_late_init();
 	omap4_pm_init();
 	omap2_clk_enable_autoidle_all();
@@ -785,6 +779,8 @@ int __init omap_clk_init(void)
 		return 0;
 
 	ti_clk_init_features();
+
+	omap2_clk_setup_ll_ops();
 
 	if (of_have_populated_dt()) {
 		ret = omap_control_init();

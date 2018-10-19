@@ -1156,7 +1156,7 @@ static int snmp_parse_mangle(unsigned char *msg,
 		}
 
 		if (obj->type == SNMP_IPADDR)
-			mangle_address(ctx.begin, ctx.pointer - 4 , map, check);
+			mangle_address(ctx.begin, ctx.pointer - 4, map, check);
 
 		kfree(obj->id);
 		kfree(obj);
@@ -1304,6 +1304,7 @@ static int __init nf_nat_snmp_basic_init(void)
 static void __exit nf_nat_snmp_basic_fini(void)
 {
 	RCU_INIT_POINTER(nf_nat_snmp_hook, NULL);
+	synchronize_rcu();
 	nf_conntrack_helper_unregister(&snmp_trap_helper);
 }
 

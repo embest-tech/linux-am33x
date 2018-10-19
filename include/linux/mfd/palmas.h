@@ -554,7 +554,8 @@ struct palmas_usb {
 
 	int gpio_id_irq;
 	struct gpio_desc *id_gpiod;
-	int sw_debounce_ms;
+	unsigned long sw_debounce_jiffies;
+	struct delayed_work wq_detectid;
 
 	enum palmas_usb_state linkstat;
 	int wakeup;

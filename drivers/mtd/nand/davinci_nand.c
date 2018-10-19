@@ -241,6 +241,9 @@ static void nand_davinci_hwctl_4bit(struct mtd_info *mtd, int mode)
 	unsigned long flags;
 	u32 val;
 
+	/* Reset ECC hardware */
+	davinci_nand_readl(info, NAND_4BIT_ECC1_OFFSET);
+
 	spin_lock_irqsave(&davinci_nand_lock, flags);
 
 	/* Start 4-bit ECC calculation for read/write */
@@ -520,7 +523,8 @@ static struct nand_ecclayout hwecc4_2048 = {
 	},
 };
 
-/* An ECC layout for using 4-bit ECC with large-page (4096bytes) flash,
+/*
+ * An ECC layout for using 4-bit ECC with large-page (4096bytes) flash,
  * storing ten ECC bytes plus the manufacturer's bad block marker byte,
  * and not overlapping the default BBT markers.
  */
@@ -536,7 +540,7 @@ static struct nand_ecclayout hwecc4_4096 = {
 		98, 99, 100, 101, 102, 103, 104, 105, 106, 107,
 		108, 109, 110, 111, 112, 113, 114, 115, 116, 117,
 		118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
-		},
+	},
 	.oobfree = {
 		/* 2 bytes at offset 0 hold manufacturer badblock markers */
 		{.offset = 2, .length = 46, },
@@ -682,9 +686,6 @@ static int nand_davinci_probe(struct platform_device *pdev)
 	info->vaddr		= vaddr;
 
 	info->mtd.priv		= &info->chip;
-	info->mtd.name		= dev_name(&pdev->dev);
-	info->mtd.owner		= THIS_MODULE;
-
 	info->mtd.dev.parent	= &pdev->dev;
 
 	info->chip.IO_ADDR_R	= vaddr;
@@ -826,6 +827,7 @@ static int nand_davinci_probe(struct platform_device *pdev)
 			info->chip.ecc.mode = NAND_ECC_HW_OOB_FIRST;
 			goto syndrome_done;
 		}
+
 		ret = -EIO;
 		goto err;
 

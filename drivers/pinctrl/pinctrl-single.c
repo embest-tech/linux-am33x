@@ -175,7 +175,6 @@ struct pcs_soc_data {
  * struct pcs_device - pinctrl device instance
  * @res:	resources
  * @base:	virtual address of the controller
- * @saved_vals: saved values for the controller
  * @size:	size of the ioremapped area
  * @dev:	device entry
  * @pctl:	pin controller device
@@ -207,7 +206,6 @@ struct pcs_soc_data {
 struct pcs_device {
 	struct resource *res;
 	void __iomem *base;
-	void *saved_vals;
 	unsigned size;
 	struct device *dev;
 	struct pinctrl_dev *pctl;
@@ -490,52 +488,6 @@ static int pcs_set_mux(struct pinctrl_dev *pctldev, unsigned fselector,
 	return 0;
 }
 
-static int pcs_save_context(struct pinctrl_dev *pctldev)
-{
-	struct pcs_device *pcs;
-	int i;
-
-	pcs = pinctrl_dev_get_drvdata(pctldev);
-
-	if (!pcs->saved_vals)
-		pcs->saved_vals = devm_kzalloc(pcs->dev, pcs->size, GFP_KERNEL);
-
-	switch (pcs->width) {
-	case 32:
-		for (i = 0; i < pcs->size; i += 4)
-			*(u32 *)(pcs->saved_vals + i) =
-				pcs->read(pcs->base + i);
-		break;
-	case 16:
-		for (i = 0; i < pcs->size; i += 2)
-			*(u16 *)(pcs->saved_vals + i) =
-				pcs->read(pcs->base + i);
-		break;
-	}
-	return 0;
-}
-
-static void pcs_restore_context(struct pinctrl_dev *pctldev)
-{
-	struct pcs_device *pcs;
-	int i;
-
-	pcs = pinctrl_dev_get_drvdata(pctldev);
-
-	switch (pcs->width) {
-	case 32:
-		for (i = 0; i < pcs->size; i += 4)
-			pcs->write(*(u32 *)(pcs->saved_vals + i),
-				pcs->base + i);
-		break;
-	case 16:
-		for (i = 0; i < pcs->size; i += 2)
-			pcs->write(*(u16 *)(pcs->saved_vals + i),
-				pcs->base + i);
-		break;
-	}
-}
-
 static int pcs_request_gpio(struct pinctrl_dev *pctldev,
 			    struct pinctrl_gpio_range *range, unsigned pin)
 {
@@ -568,8 +520,6 @@ static const struct pinmux_ops pcs_pinmux_ops = {
 	.get_function_name = pcs_get_function_name,
 	.get_function_groups = pcs_get_function_groups,
 	.set_mux = pcs_set_mux,
-	.save_context = pcs_save_context,
-	.restore_context = pcs_restore_context,
 	.gpio_request_enable = pcs_request_gpio,
 };
 
@@ -1323,9 +1273,9 @@ static int pcs_parse_bits_in_pinctrl_entry(struct pcs_device *pcs,
 
 		/* Parse pins in each row from LSB */
 		while (mask) {
-			bit_pos = ffs(mask);
+			bit_pos = __ffs(mask);
 			pin_num_from_lsb = bit_pos / pcs->bits_per_pin;
-			mask_pos = ((pcs->fmask) << (bit_pos - 1));
+			mask_pos = ((pcs->fmask) << bit_pos);
 			val_pos = val & mask_pos;
 			submask = mask & mask_pos;
 
@@ -1626,6 +1576,9 @@ static inline void pcs_irq_set(struct pcs_soc_data *pcs_soc,
 		else
 			mask &= ~soc_mask;
 		pcs->write(mask, pcswi->reg);
+
+		/* flush posted write */
+		mask = pcs->read(pcswi->reg);
 		raw_spin_unlock(&pcs->lock);
 	}
 
@@ -1729,12 +1682,12 @@ static irqreturn_t pcs_irq_handler(int irq, void *d)
  * Use this if you have a separate interrupt for each
  * pinctrl-single instance.
  */
-static void pcs_irq_chain_handler(unsigned int irq, struct irq_desc *desc)
+static void pcs_irq_chain_handler(struct irq_desc *desc)
 {
 	struct pcs_soc_data *pcs_soc = irq_desc_get_handler_data(desc);
 	struct irq_chip *chip;
 
-	chip = irq_get_chip(irq);
+	chip = irq_desc_get_chip(desc);
 	chained_irq_enter(chip, desc);
 	pcs_irq_handle(pcs_soc);
 	/* REVISIT: export and add handle_bad_irq(irq, desc)? */
@@ -1766,17 +1719,12 @@ static int pcs_irqdomain_map(struct irq_domain *d, unsigned int irq,
 	irq_set_chip_data(irq, pcs_soc);
 	irq_set_chip_and_handler(irq, &pcs->chip,
 				 handle_level_irq);
-
-#ifdef CONFIG_ARM
-	set_irq_flags(irq, IRQF_VALID);
-#else
 	irq_set_noprobe(irq);
-#endif
 
 	return 0;
 }
 
-static struct irq_domain_ops pcs_irqdomain_ops = {
+static const struct irq_domain_ops pcs_irqdomain_ops = {
 	.map = pcs_irqdomain_map,
 	.xlate = irq_domain_xlate_onecell,
 };
@@ -1810,16 +1758,17 @@ static int pcs_irq_init_chained_handler(struct pcs_device *pcs,
 		int res;
 
 		res = request_irq(pcs_soc->irq, pcs_irq_handler,
-				  IRQF_SHARED | IRQF_NO_SUSPEND,
+				  IRQF_SHARED | IRQF_NO_SUSPEND |
+				  IRQF_NO_THREAD,
 				  name, pcs_soc);
 		if (res) {
 			pcs_soc->irq = -1;
 			return res;
 		}
 	} else {
-		irq_set_handler_data(pcs_soc->irq, pcs_soc);
-		irq_set_chained_handler(pcs_soc->irq,
-					pcs_irq_chain_handler);
+		irq_set_chained_handler_and_data(pcs_soc->irq,
+						 pcs_irq_chain_handler,
+						 pcs_soc);
 	}
 
 	/*
@@ -1901,7 +1850,7 @@ static int pcs_probe(struct platform_device *pdev)
 	ret = of_property_read_u32(np, "pinctrl-single,function-mask",
 				   &pcs->fmask);
 	if (!ret) {
-		pcs->fshift = ffs(pcs->fmask) - 1;
+		pcs->fshift = __ffs(pcs->fmask);
 		pcs->fmax = pcs->fmask >> pcs->fshift;
 	} else {
 		/* If mask property doesn't exist, function mux is invalid. */
@@ -1971,9 +1920,9 @@ static int pcs_probe(struct platform_device *pdev)
 		goto free;
 
 	pcs->pctl = pinctrl_register(&pcs->desc, pcs->dev, pcs);
-	if (!pcs->pctl) {
+	if (IS_ERR(pcs->pctl)) {
 		dev_err(pcs->dev, "could not register single pinctrl driver\n");
-		ret = -EINVAL;
+		ret = PTR_ERR(pcs->pctl);
 		goto free;
 	}
 

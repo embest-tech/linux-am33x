@@ -52,6 +52,12 @@ struct alt_instr {
 	u8  padlen;		/* length of build-time padding */
 } __packed;
 
+/*
+ * Debug flag that can be tested to see whether alternative
+ * instructions were patched in already:
+ */
+extern int alternatives_patched;
+
 extern void alternative_instructions(void);
 extern void apply_alternatives(struct alt_instr *start, struct alt_instr *end);
 
@@ -96,12 +102,12 @@ static inline int alternatives_text_reserved(void *start, void *end)
 	alt_end_marker ":\n"
 
 /*
- * max without conditionals. Idea adapted from:
+ * gas compatible max based on the idea from:
  * http://graphics.stanford.edu/~seander/bithacks.html#IntegerMinOrMax
  *
- * The additional "-" is needed because gas works with s32s.
+ * The additional "-" is needed because gas uses a "true" value of -1.
  */
-#define alt_max_short(a, b)	"((" a ") ^ (((" a ") ^ (" b ")) & -(-((" a ") - (" b ")))))"
+#define alt_max_short(a, b)	"((" a ") ^ (((" a ") ^ (" b ")) & -(-((" a ") < (" b ")))))"
 
 /*
  * Pad the second replacement alternative with additional NOPs if it is

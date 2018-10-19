@@ -24,9 +24,11 @@
 ACPI_MODULE_NAME("platform");
 
 static const struct acpi_device_id forbidden_id_list[] = {
-	{"PNP0000", 0},	/* PIC */
-	{"PNP0100", 0},	/* Timer */
-	{"PNP0200", 0},	/* AT DMA Controller */
+	{"PNP0000",  0},	/* PIC */
+	{"PNP0100",  0},	/* Timer */
+	{"PNP0200",  0},	/* AT DMA Controller */
+	{"ACPI0009", 0},	/* IOxAPIC */
+	{"ACPI000A", 0},	/* IOAPIC */
 	{"", 0},
 };
 
@@ -103,7 +105,12 @@ struct platform_device *acpi_create_platform_device(struct acpi_device *adev)
 	pdevinfo.res = resources;
 	pdevinfo.num_res = count;
 	pdevinfo.fwnode = acpi_fwnode_handle(adev);
-	pdevinfo.dma_mask = DMA_BIT_MASK(32);
+
+	if (acpi_dma_supported(adev))
+		pdevinfo.dma_mask = DMA_BIT_MASK(32);
+	else
+		pdevinfo.dma_mask = 0;
+
 	pdev = platform_device_register_full(&pdevinfo);
 	if (IS_ERR(pdev))
 		dev_err(&adev->dev, "platform device creation failed: %ld\n",

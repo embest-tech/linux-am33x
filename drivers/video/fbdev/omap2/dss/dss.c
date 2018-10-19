@@ -1225,6 +1225,15 @@ static int dss_add_child_component(struct device *dev, void *data)
 {
 	struct component_match **match = data;
 
+	/*
+	 * HACK
+	 * We don't have a working driver for rfbi, so skip it here always.
+	 * Otherwise dss will never get probed successfully, as it will wait
+	 * for rfbi to get probed.
+	 */
+	if (strstr(dev_name(dev), "rfbi"))
+		return 0;
+
 	component_match_add(dev->parent, match, dss_component_compare, dev);
 
 	return 0;
@@ -1255,18 +1264,12 @@ static int dss_runtime_suspend(struct device *dev)
 {
 	dss_save_context();
 	dss_set_min_bus_tput(dev, 0);
-
-	pinctrl_pm_select_sleep_state(dev);
-
 	return 0;
 }
 
 static int dss_runtime_resume(struct device *dev)
 {
 	int r;
-
-	pinctrl_pm_select_default_state(dev);
-
 	/*
 	 * Set an arbitrarily high tput request to ensure OPP100.
 	 * What we should really do is to make a request to stay in OPP100,

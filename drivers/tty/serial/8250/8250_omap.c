@@ -22,7 +22,6 @@
 #include <linux/delay.h>
 #include <linux/pm_runtime.h>
 #include <linux/console.h>
-#include <linux/pinctrl/consumer.h>
 #include <linux/pm_qos.h>
 #include <linux/pm_wakeirq.h>
 #include <linux/dma-mapping.h>
@@ -113,6 +112,7 @@ struct omap8250_priv {
 	struct work_struct qos_work;
 	struct uart_8250_dma omap8250_dma;
 	spinlock_t rx_dma_lock;
+	bool rx_dma_broken;
 };
 
 static u32 uart_read(struct uart_8250_port *up, u32 reg)
@@ -439,7 +439,6 @@ static void omap_8250_set_termios(struct uart_port *port,
 	priv->xoff = termios->c_cc[VSTOP];
 
 	priv->efr = 0;
-	up->mcr &= ~(UART_MCR_RTS | UART_MCR_XONANY);
 	up->port.status &= ~(UPSTAT_AUTOCTS | UPSTAT_AUTORTS | UPSTAT_AUTOXOFF);
 
 	if (termios->c_cflag & CRTSCTS && up->port.flags & UPF_HARD_FLOW) {
@@ -448,12 +447,9 @@ static void omap_8250_set_termios(struct uart_port *port,
 		priv->efr |= UART_EFR_CTS;
 	} else	if (up->port.flags & UPF_SOFT_FLOW) {
 		/*
-		 * IXON Flag:
-		 * Enable XON/XOFF flow control on input.
-		 * Receiver compares XON1, XOFF1.
+		 * OMAP rx s/w flow control is borked; the transmitter remains
+		 * stuck off even if rx flow control is subsequently disabled
 		 */
-		if (termios->c_iflag & IXON)
-			priv->efr |= OMAP_UART_SW_RX;
 
 		/*
 		 * IXOFF Flag:
@@ -464,15 +460,6 @@ static void omap_8250_set_termios(struct uart_port *port,
 			up->port.status |= UPSTAT_AUTOXOFF;
 			priv->efr |= OMAP_UART_SW_TX;
 		}
-
-		/*
-		 * IXANY Flag:
-		 * Enable any character to restart output.
-		 * Operation resumes after receiving any
-		 * character after recognition of the XOFF character
-		 */
-		if (termios->c_iflag & IXANY)
-			up->mcr |= UART_MCR_XONANY;
 	}
 	omap8250_restore_regs(up);
 
@@ -777,6 +764,7 @@ static void omap_8250_rx_dma_flush(struct uart_8250_port *p)
 	struct omap8250_priv	*priv = p->port.private_data;
 	struct uart_8250_dma	*dma = p->dma;
 	unsigned long		flags;
+	int ret;
 
 	spin_lock_irqsave(&priv->rx_dma_lock, flags);
 
@@ -785,7 +773,9 @@ static void omap_8250_rx_dma_flush(struct uart_8250_port *p)
 		return;
 	}
 
-	dmaengine_pause(dma->rxchan);
+	ret = dmaengine_pause(dma->rxchan);
+	if (WARN_ON_ONCE(ret))
+		priv->rx_dma_broken = true;
 
 	spin_unlock_irqrestore(&priv->rx_dma_lock, flags);
 
@@ -828,6 +818,9 @@ static int omap_8250_rx_dma(struct uart_8250_port *p, unsigned int iir)
 	default:
 		break;
 	}
+
+	if (priv->rx_dma_broken)
+		return -EINVAL;
 
 	spin_lock_irqsave(&priv->rx_dma_lock, flags);
 
@@ -1097,7 +1090,6 @@ static int omap8250_probe(struct platform_device *pdev)
 	struct resource *irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	struct omap8250_priv *priv;
 	struct uart_8250_port up;
-	struct gpio_desc *enable;
 	int ret;
 	void __iomem *membase;
 
@@ -1183,13 +1175,6 @@ static int omap8250_probe(struct platform_device *pdev)
 			 DEFAULT_CLK_SPEED);
 	}
 
-	/* on some boards, a GPIO based port enable is present */
-	enable = devm_gpiod_get_optional(&pdev->dev, "enable", GPIOD_OUT_HIGH);
-	if (IS_ERR(enable)) {
-		dev_err(&pdev->dev, "gpio request failed: %d\n", ret);
-		return PTR_ERR(enable);
-	}
-
 	priv->latency = PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE;
 	priv->calc_latency = PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE;
 	pm_qos_add_request(&priv->pm_qos_request, PM_QOS_CPU_DMA_LATENCY,
@@ -1231,6 +1216,11 @@ static int omap8250_probe(struct platform_device *pdev)
 
 			if (of_machine_is_compatible("ti,am33xx"))
 				priv->habit |= OMAP_DMA_TX_KICK;
+			/*
+			 * pause is currently not supported atleast on omap-sdma
+			 * and edma on most earlier kernels.
+			 */
+			priv->rx_dma_broken = true;
 		}
 	}
 #endif
@@ -1245,7 +1235,8 @@ static int omap8250_probe(struct platform_device *pdev)
 	pm_runtime_put_autosuspend(&pdev->dev);
 	return 0;
 err:
-	pm_runtime_put(&pdev->dev);
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
+	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 	return ret;
 }
@@ -1254,6 +1245,7 @@ static int omap8250_remove(struct platform_device *pdev)
 {
 	struct omap8250_priv *priv = platform_get_drvdata(pdev);
 
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 	serial8250_unregister_port(priv->line);
@@ -1353,6 +1345,10 @@ static int omap8250_runtime_suspend(struct device *dev)
 	struct omap8250_priv *priv = dev_get_drvdata(dev);
 	struct uart_8250_port *up;
 
+	/* In case runtime-pm tries this before we are setup */
+	if (!priv)
+		return 0;
+
 	up = serial8250_get_port(priv->line);
 	/*
 	 * When using 'no_console_suspend', the console UART must not be
@@ -1382,8 +1378,6 @@ static int omap8250_runtime_suspend(struct device *dev)
 	priv->latency = PM_QOS_CPU_DMA_LAT_DEFAULT_VALUE;
 	schedule_work(&priv->qos_work);
 
-	pinctrl_pm_select_sleep_state(dev);
-
 	return 0;
 }
 
@@ -1396,8 +1390,6 @@ static int omap8250_runtime_resume(struct device *dev)
 	/* In case runtime-pm tries this before we are setup */
 	if (!priv)
 		return 0;
-
-	pinctrl_pm_select_default_state(dev);
 
 	up = serial8250_get_port(priv->line);
 	loss_cntx = omap8250_lost_context(up);

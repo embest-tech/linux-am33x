@@ -84,7 +84,7 @@ static long long __init keystone_pv_fixup(void)
 	if (mem_start < KEYSTONE_HIGH_PHYS_START ||
 	    mem_end   > KEYSTONE_HIGH_PHYS_END) {
 		pr_crit("Invalid address space for memory (%08llx-%08llx)\n",
-			(u64)mem_start, (u64)mem_end);
+		        (u64)mem_start, (u64)mem_end);
 		return 0;
 	}
 
@@ -97,6 +97,9 @@ static long long __init keystone_pv_fixup(void)
 }
 
 static const char *const keystone_match[] __initconst = {
+	"ti,k2hk",
+	"ti,k2e",
+	"ti,k2l",
 	"ti,keystone",
 	NULL,
 };

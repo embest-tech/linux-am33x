@@ -32,8 +32,6 @@
 		serial3 = &uart4;
 		serial4 = &uart5;
 		serial5 = &uart6;
-		rproc0 = &dsp;
-		rproc1 = &ipu;
 	};
 
 	cpus {
@@ -187,9 +185,10 @@
 					reg = <0x5a0 0xec>;
 					#address-cells = <1>;
 					#size-cells = <1>;
+					ranges = <0 0x5a0 0xec>;
 
 					pbias_regulator: pbias_regulator {
-						compatible = "ti,pbias-omap";
+						compatible = "ti,pbias-omap5", "ti,pbias-omap";
 						reg = <0x60 0x4>;
 						syscon = <&omap5_padconf_global>;
 						pbias_mmc_reg: pbias_mmc_omap5 {
@@ -820,23 +819,6 @@
 			ti,hwmods = "wd_timer2";
 		};
 
-		dsp: dsp {
-			compatible = "ti,omap5-rproc-dsp";
-			ti,hwmods = "dsp";
-			syscon-bootreg = <&scm_conf 0x304>;
-			iommus = <&mmu_dsp>;
-			mboxes = <&mailbox &mbox_dsp>;
-			status = "disabled";
-		};
-
-		ipu: ipu {
-			compatible = "ti,omap5-rproc-ipu";
-			ti,hwmods = "ipu";
-			iommus = <&mmu_ipu>;
-			mboxes = <&mailbox &mbox_ipu>;
-			status = "disabled";
-		};
-
 		dmm@4e000000 {
 			compatible = "ti,omap5-dmm";
 			reg = <0x4e000000 0x800>;
@@ -1151,40 +1133,6 @@
 			/*uV		ABB	efuse	rbb_m fbb_m	vset_m*/
 			1025000		0	0x0	0 0x02000000 0x01F00000
 			1120000		0	0x4	0 0x02000000 0x01F00000
-			>;
-		};
-
-		voltdm_mpu: voltdm@4a0021c4 {
-			compatible = "ti,omap5-voltdm";
-			#voltdm-cells = <0>;
-			vbb-supply = <&abb_mpu>;
-			reg = <0x4a0021c4 0x8>;
-			ti,efuse-settings = <
-			/* uV   offset */
-			1060000 0x0
-			1250000 0x4
-			>;
-		};
-
-		voltdm_mm: voltdm@4a0021a4 {
-			compatible = "ti,omap5-voltdm";
-			#voltdm-cells = <0>;
-			vbb-supply = <&abb_mm>;
-			reg = <0x4a0021a4 0x8>;
-			ti,efuse-settings = <
-			/* uV   offset */
-			1025000 0x0
-			1120000 0x4
-			>;
-		};
-
-		voltdm_core: voltdm@4a0021d8 {
-			compatible = "ti,omap5-core-voltdm";
-			#voltdm-cells = <0>;
-			reg = <0x4a0021d8 0x4>;
-			ti,efuse-settings = <
-			/* uV   offset */
-			1050000 0x0
 			>;
 		};
 	};

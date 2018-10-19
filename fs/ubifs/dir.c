@@ -350,7 +350,7 @@ static unsigned int vfs_dent_type(uint8_t type)
  */
 static int ubifs_readdir(struct file *file, struct dir_context *ctx)
 {
-	int err;
+	int err = 0;
 	struct qstr nm;
 	union ubifs_key key;
 	struct ubifs_dent_node *dent;
@@ -449,16 +449,23 @@ static int ubifs_readdir(struct file *file, struct dir_context *ctx)
 	}
 
 out:
-	if (err != -ENOENT) {
-		ubifs_err(c, "cannot find next direntry, error %d", err);
-		return err;
-	}
-
 	kfree(file->private_data);
 	file->private_data = NULL;
+
+	if (err != -ENOENT)
+		ubifs_err(c, "cannot find next direntry, error %d", err);
+	else
+		/*
+		 * -ENOENT is a non-fatal error in this context, the TNC uses
+		 * it to indicate that the cursor moved past the current directory
+		 * and readdir() has to stop.
+		 */
+		err = 0;
+
+
 	/* 2 is a special value indicating that there are no more direntries */
 	ctx->pos = 2;
-	return 0;
+	return err;
 }
 
 /* Free saved readdir() state when the directory is closed */
@@ -787,9 +794,6 @@ static int ubifs_mknod(struct inode *dir, struct dentry *dentry,
 
 	dbg_gen("dent '%pd' in dir ino %lu", dentry, dir->i_ino);
 
-	if (!new_valid_dev(rdev))
-		return -EINVAL;
-
 	if (S_ISBLK(mode) || S_ISCHR(mode)) {
 		dev = kmalloc(sizeof(union ubifs_dev_desc), GFP_NOFS);
 		if (!dev)
@@ -889,6 +893,7 @@ static int ubifs_symlink(struct inode *dir, struct dentry *dentry,
 
 	memcpy(ui->data, symname, len);
 	((char *)ui->data)[len] = '\0';
+	inode->i_link = ui->data;
 	/*
 	 * The terminating zero byte is not written to the flash media and it
 	 * is put just to make later in-memory string processing simpler. Thus,
@@ -1187,6 +1192,9 @@ const struct inode_operations ubifs_dir_inode_operations = {
 	.getxattr    = ubifs_getxattr,
 	.listxattr   = ubifs_listxattr,
 	.removexattr = ubifs_removexattr,
+#ifdef CONFIG_UBIFS_ATIME_SUPPORT
+	.update_time = ubifs_update_time,
+#endif
 };
 
 const struct file_operations ubifs_dir_operations = {

@@ -92,13 +92,12 @@ static struct property *dlpar_clone_drconf_property(struct device_node *dn)
 		return NULL;
 
 	new_prop->name = kstrdup(prop->name, GFP_KERNEL);
-	new_prop->value = kmalloc(prop->length, GFP_KERNEL);
+	new_prop->value = kmemdup(prop->value, prop->length, GFP_KERNEL);
 	if (!new_prop->name || !new_prop->value) {
 		dlpar_free_drconf_property(new_prop);
 		return NULL;
 	}
 
-	memcpy(new_prop->value, prop->value, prop->length);
 	new_prop->length = prop->length;
 
 	/* Convert the property to cpu endian-ness */
@@ -111,6 +110,7 @@ static struct property *dlpar_clone_drconf_property(struct device_node *dn)
 	for (i = 0; i < num_lmbs; i++) {
 		lmbs[i].base_addr = be64_to_cpu(lmbs[i].base_addr);
 		lmbs[i].drc_index = be32_to_cpu(lmbs[i].drc_index);
+		lmbs[i].aa_index = be32_to_cpu(lmbs[i].aa_index);
 		lmbs[i].flags = be32_to_cpu(lmbs[i].flags);
 	}
 
@@ -554,6 +554,7 @@ static void dlpar_update_drconf_property(struct device_node *dn,
 	for (i = 0; i < num_lmbs; i++) {
 		lmbs[i].base_addr = cpu_to_be64(lmbs[i].base_addr);
 		lmbs[i].drc_index = cpu_to_be32(lmbs[i].drc_index);
+		lmbs[i].aa_index = cpu_to_be32(lmbs[i].aa_index);
 		lmbs[i].flags = cpu_to_be32(lmbs[i].flags);
 	}
 

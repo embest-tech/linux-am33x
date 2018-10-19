@@ -51,8 +51,6 @@ struct omap_plane_state {
 	struct drm_plane_state base;
 
 	unsigned int zorder;
-	unsigned int global_alpha;
-	unsigned int pre_mult_alpha;
 };
 
 static inline struct omap_plane_state *
@@ -62,17 +60,19 @@ to_omap_plane_state(struct drm_plane_state *state)
 }
 
 static int omap_plane_prepare_fb(struct drm_plane *plane,
-				 struct drm_framebuffer *fb,
 				 const struct drm_plane_state *new_state)
 {
-	return omap_framebuffer_pin(fb);
+	if (!new_state->fb)
+		return 0;
+
+	return omap_framebuffer_pin(new_state->fb);
 }
 
 static void omap_plane_cleanup_fb(struct drm_plane *plane,
-				  struct drm_framebuffer *fb,
 				  const struct drm_plane_state *old_state)
 {
-	omap_framebuffer_unpin(fb);
+	if (old_state->fb)
+		omap_framebuffer_unpin(old_state->fb);
 }
 
 static void omap_plane_atomic_update(struct drm_plane *plane,
@@ -90,10 +90,9 @@ static void omap_plane_atomic_update(struct drm_plane *plane,
 	memset(&info, 0, sizeof(info));
 	info.rotation_type = OMAP_DSS_ROT_DMA;
 	info.rotation = OMAP_DSS_ROT_0;
+	info.global_alpha = 0xff;
 	info.mirror = 0;
 	info.zorder = omap_state->zorder;
-	info.global_alpha = omap_state->global_alpha;
-	info.pre_mult_alpha = omap_state->pre_mult_alpha;
 
 	memset(&win, 0, sizeof(win));
 	win.rotation = state->rotation;
@@ -109,7 +108,7 @@ static void omap_plane_atomic_update(struct drm_plane *plane,
 	win.src_x = state->src_x >> 16;
 	win.src_y = state->src_y >> 16;
 
-	switch (state->rotation & 0xf) {
+	switch (state->rotation & DRM_ROTATE_MASK) {
 	case BIT(DRM_ROTATE_90):
 	case BIT(DRM_ROTATE_270):
 		win.src_w = state->src_h >> 16;
@@ -178,12 +177,6 @@ static int omap_plane_atomic_check(struct drm_plane *plane,
 	if (state->crtc_y + state->crtc_h > crtc_state->adjusted_mode.vdisplay)
 		return -EINVAL;
 
-	if (state->fb) {
-		if (state->rotation != BIT(DRM_ROTATE_0) &&
-		    !omap_framebuffer_supports_rotation(state->fb))
-			return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -200,12 +193,11 @@ static void omap_plane_reset(struct drm_plane *plane)
 	struct omap_plane *omap_plane = to_omap_plane(plane);
 	struct omap_plane_state *omap_state;
 
-	if (plane->state) {
-		__drm_atomic_helper_plane_destroy_state(plane, plane->state);
+	if (plane->state && plane->state->fb)
+		drm_framebuffer_unreference(plane->state->fb);
 
-		kfree(plane->state);
-		plane->state = NULL;
-	}
+	kfree(plane->state);
+	plane->state = NULL;
 
 	omap_state = kzalloc(sizeof(*omap_state), GFP_KERNEL);
 	if (omap_state == NULL)
@@ -218,8 +210,6 @@ static void omap_plane_reset(struct drm_plane *plane)
 	omap_state->zorder = plane->type == DRM_PLANE_TYPE_PRIMARY
 			   ? 0 : omap_plane->id;
 	omap_state->base.rotation = BIT(DRM_ROTATE_0);
-	omap_state->global_alpha = 0xff;
-	omap_state->pre_mult_alpha = 0;
 
 	plane->state = &omap_state->base;
 	plane->state->plane = plane;
@@ -252,8 +242,6 @@ void omap_plane_install_properties(struct drm_plane *plane,
 	}
 
 	drm_object_attach_property(obj, priv->zorder_prop, 0);
-	drm_object_attach_property(obj, priv->global_alpha_prop, 0);
-	drm_object_attach_property(obj, priv->pre_mult_alpha_prop, 0);
 }
 
 static struct drm_plane_state *
@@ -292,10 +280,6 @@ static int omap_plane_atomic_set_property(struct drm_plane *plane,
 
 	if (property == priv->zorder_prop)
 		omap_state->zorder = val;
-	else if (property == priv->global_alpha_prop)
-		omap_state->global_alpha = val;
-	else if (property == priv->pre_mult_alpha_prop)
-		omap_state->pre_mult_alpha = val;
 	else
 		return -EINVAL;
 
@@ -313,10 +297,6 @@ static int omap_plane_atomic_get_property(struct drm_plane *plane,
 
 	if (property == priv->zorder_prop)
 		*val = omap_state->zorder;
-	else if (property == priv->global_alpha_prop)
-		*val = omap_state->global_alpha;
-	else if (property == priv->pre_mult_alpha_prop)
-		*val = omap_state->pre_mult_alpha;
 	else
 		return -EINVAL;
 

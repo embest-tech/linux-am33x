@@ -465,7 +465,7 @@ static int max77686_rtc_probe(struct platform_device *pdev)
 
 	info->virq = regmap_irq_get_virq(max77686->rtc_irq_data,
 					 MAX77686_RTCIRQ_RTCA1);
-	if (!info->virq) {
+	if (info->virq <= 0) {
 		ret = -ENXIO;
 		goto err_rtc;
 	}
@@ -511,6 +511,7 @@ static const struct platform_device_id rtc_id[] = {
 	{ "max77686-rtc", 0 },
 	{},
 };
+MODULE_DEVICE_TABLE(platform, rtc_id);
 
 static struct platform_driver max77686_rtc_driver = {
 	.driver		= {

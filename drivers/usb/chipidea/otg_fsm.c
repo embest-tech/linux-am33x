@@ -525,7 +525,6 @@ static int ci_otg_start_host(struct otg_fsm *fsm, int on)
 		ci_role_start(ci, CI_ROLE_HOST);
 	} else {
 		ci_role_stop(ci);
-		hw_device_reset(ci);
 		ci_role_start(ci, CI_ROLE_GADGET);
 	}
 	return 0;
@@ -777,7 +776,6 @@ int ci_hdrc_otg_fsm_init(struct ci_hdrc *ci)
 	ci->fsm.id = hw_read_otgsc(ci, OTGSC_ID) ? 1 : 0;
 	ci->fsm.otg->state = OTG_STATE_UNDEFINED;
 	ci->fsm.ops = &ci_otg_ops;
-	ci->fsm.dev = ci->dev;
 
 	mutex_init(&ci->fsm.lock);
 

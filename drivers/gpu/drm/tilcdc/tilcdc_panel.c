@@ -58,18 +58,7 @@ static void panel_encoder_dpms(struct drm_encoder *encoder, int mode)
 	struct panel_encoder *panel_encoder = to_panel_encoder(encoder);
 	struct backlight_device *backlight = panel_encoder->mod->backlight;
 	struct gpio_desc *gpio = panel_encoder->mod->enable_gpio;
-	void __iomem *reg;
 
-	if (gpio) {
-		if (backlight) {
-			reg = ioremap(0x44E10800, 0x200);
-			reg += 0x164;
-			if (mode == DRM_MODE_DPMS_ON)
-				writel(0, reg);
-			else
-				writel(7, reg);
-		}
-	}
 	if (backlight) {
 		backlight->props.power = mode == DRM_MODE_DPMS_ON ?
 					 FB_BLANK_UNBLANK : FB_BLANK_POWERDOWN;
@@ -386,24 +375,16 @@ static int panel_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev, "found backlight\n");
 	}
 
-	panel_mod->enable_gpio = devm_gpiod_get(&pdev->dev, "enable");
+	panel_mod->enable_gpio = devm_gpiod_get_optional(&pdev->dev, "enable",
+							 GPIOD_OUT_LOW);
 	if (IS_ERR(panel_mod->enable_gpio)) {
 		ret = PTR_ERR(panel_mod->enable_gpio);
-		if (ret != -ENOENT) {
-			dev_err(&pdev->dev, "failed to request enable GPIO\n");
-			goto fail_backlight;
-		}
-
-		/* Optional GPIO is not here, continue silently. */
-		panel_mod->enable_gpio = NULL;
-	} else {
-		ret = gpiod_direction_output(panel_mod->enable_gpio, 0);
-		if (ret < 0) {
-			dev_err(&pdev->dev, "failed to setup GPIO\n");
-			goto fail_backlight;
-		}
-		dev_info(&pdev->dev, "found enable GPIO\n");
+		dev_err(&pdev->dev, "failed to request enable GPIO\n");
+		goto fail_backlight;
 	}
+
+	if (panel_mod->enable_gpio)
+		dev_info(&pdev->dev, "found enable GPIO\n");
 
 	mod = &panel_mod->base;
 	pdev->dev.platform_data = mod;

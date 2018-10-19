@@ -47,7 +47,7 @@ static void _add_clkdev(struct omap_device *od, const char *clk_alias,
 		       const char *clk_name)
 {
 	struct clk *r;
-	struct clk_lookup *l;
+	int rc;
 
 	if (!clk_alias || !clk_name)
 		return;
@@ -62,21 +62,15 @@ static void _add_clkdev(struct omap_device *od, const char *clk_alias,
 		return;
 	}
 
-	r = clk_get(NULL, clk_name);
-	if (IS_ERR(r)) {
-		dev_err(&od->pdev->dev,
-			"clk_get for %s failed\n", clk_name);
-		return;
+	rc = clk_add_alias(clk_alias, dev_name(&od->pdev->dev), clk_name, NULL);
+	if (rc) {
+		if (rc == -ENODEV || rc == -ENOMEM)
+			dev_err(&od->pdev->dev,
+				"clkdev_alloc for %s failed\n", clk_alias);
+		else
+			dev_err(&od->pdev->dev,
+				"clk_get for %s failed\n", clk_name);
 	}
-
-	l = clkdev_alloc(r, clk_alias, dev_name(&od->pdev->dev));
-	if (!l) {
-		dev_err(&od->pdev->dev,
-			"clkdev_alloc for %s failed\n", clk_alias);
-		return;
-	}
-
-	clkdev_add(l);
 }
 
 /**
@@ -191,27 +185,6 @@ odbfd_exit:
 	return ret;
 }
 
-/**
- * _omap_device_check_reidle_hwmods - check all hwmods in device for reidle flag
- * @od: struct omap_device *od
- *
- * Checks underlying hwmods for reidle flag, if present, remove from hwmod
- * list and set flag in omap_device to keep track.  Returns 0.
- */
-static int _omap_device_check_reidle_hwmods(struct omap_device *od)
-{
-	int i;
-
-	for (i = 0; i < od->hwmods_cnt; i++) {
-		if (od->hwmods[i]->flags & HWMOD_NEEDS_REIDLE) {
-			od->flags |= OMAP_DEVICE_HAS_REIDLE_HWMODS;
-			omap_hwmod_disable_reidle(od->hwmods[i]);
-		}
-	}
-
-	return 0;
-}
-
 static int _omap_device_notifier_call(struct notifier_block *nb,
 				      unsigned long event, void *dev)
 {
@@ -222,13 +195,6 @@ static int _omap_device_notifier_call(struct notifier_block *nb,
 	case BUS_NOTIFY_DEL_DEVICE:
 		if (pdev->archdata.od)
 			omap_device_delete(pdev->archdata.od);
-		break;
-	case BUS_NOTIFY_BOUND_DRIVER:
-		od = to_omap_device(pdev);
-		if (od) {
-			od->_driver_status = BUS_NOTIFY_BOUND_DRIVER;
-			_omap_device_check_reidle_hwmods(od);
-		}
 		break;
 	case BUS_NOTIFY_ADD_DEVICE:
 		if (pdev->dev.of_node)
@@ -252,13 +218,13 @@ static int _omap_device_notifier_call(struct notifier_block *nb,
  */
 static int _omap_device_enable_hwmods(struct omap_device *od)
 {
+	int ret = 0;
 	int i;
 
 	for (i = 0; i < od->hwmods_cnt; i++)
-		omap_hwmod_enable(od->hwmods[i]);
+		ret |= omap_hwmod_enable(od->hwmods[i]);
 
-	/* XXX pass along return value here? */
-	return 0;
+	return ret;
 }
 
 /**
@@ -269,31 +235,13 @@ static int _omap_device_enable_hwmods(struct omap_device *od)
  */
 static int _omap_device_idle_hwmods(struct omap_device *od)
 {
+	int ret = 0;
 	int i;
 
 	for (i = 0; i < od->hwmods_cnt; i++)
-		omap_hwmod_idle(od->hwmods[i]);
+		ret |= omap_hwmod_idle(od->hwmods[i]);
 
-	/* XXX pass along return value here? */
-	return 0;
-}
-
-/**
- * _omap_device_reidle_hwmods - call omap_hwmod_enable_reidle on all hwmods
- * @od: struct omap_device *od
- *
- * Add all underlying hwmods to hwmod reidle list.  Returns 0.
- */
-static int _omap_device_reidle_hwmods(struct omap_device *od)
-{
-	int i;
-
-	for (i = 0; i < od->hwmods_cnt; i++)
-		if (od->hwmods[i]->flags | HWMOD_NEEDS_REIDLE)
-			omap_hwmod_enable_reidle(od->hwmods[i]);
-
-	/* XXX pass along return value here? */
-	return 0;
+	return ret;
 }
 
 /* Public functions for use by core code */
@@ -534,9 +482,6 @@ void omap_device_delete(struct omap_device *od)
 	if (!od)
 		return;
 
-	if (od->flags & OMAP_DEVICE_HAS_REIDLE_HWMODS)
-		_omap_device_reidle_hwmods(od);
-
 	od->pdev->archdata.od = NULL;
 	kfree(od->hwmods);
 	kfree(od);
@@ -644,18 +589,20 @@ static int _od_runtime_suspend(struct device *dev)
 	int ret;
 
 	ret = pm_generic_runtime_suspend(dev);
+	if (ret)
+		return ret;
 
-	if (!ret)
-		omap_device_idle(pdev);
-
-	return ret;
+	return omap_device_idle(pdev);
 }
 
 static int _od_runtime_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
+	int ret;
 
-	omap_device_enable(pdev);
+	ret = omap_device_enable(pdev);
+	if (ret)
+		return ret;
 
 	return pm_generic_runtime_resume(dev);
 }
@@ -737,11 +684,8 @@ struct dev_pm_domain omap_device_pm_domain = {
 		SET_RUNTIME_PM_OPS(_od_runtime_suspend, _od_runtime_resume,
 				   NULL)
 		USE_PLATFORM_PM_SLEEP_OPS
-		.suspend_noirq = _od_suspend_noirq,
-		.resume_noirq = _od_resume_noirq,
-		.freeze_noirq = _od_suspend_noirq,
-		.thaw_noirq = _od_resume_noirq,
-		.restore_noirq = _od_resume_noirq,
+		SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(_od_suspend_noirq,
+					      _od_resume_noirq)
 	}
 };
 
@@ -792,7 +736,8 @@ int omap_device_enable(struct platform_device *pdev)
 
 	ret = _omap_device_enable_hwmods(od);
 
-	od->_state = OMAP_DEVICE_STATE_ENABLED;
+	if (ret == 0)
+		od->_state = OMAP_DEVICE_STATE_ENABLED;
 
 	return ret;
 }
@@ -822,7 +767,8 @@ int omap_device_idle(struct platform_device *pdev)
 
 	ret = _omap_device_idle_hwmods(od);
 
-	od->_state = OMAP_DEVICE_STATE_IDLE;
+	if (ret == 0)
+		od->_state = OMAP_DEVICE_STATE_IDLE;
 
 	return ret;
 }
@@ -920,8 +866,60 @@ static struct notifier_block platform_nb = {
 
 static int __init omap_device_init(void)
 {
-	omap_hwmod_setup_reidle();
 	bus_register_notifier(&platform_bus_type, &platform_nb);
 	return 0;
 }
 omap_core_initcall(omap_device_init);
+
+/**
+ * omap_device_late_idle - idle devices without drivers
+ * @dev: struct device * associated with omap_device
+ * @data: unused
+ *
+ * Check the driver bound status of this device, and idle it
+ * if there is no driver attached.
+ */
+static int __init omap_device_late_idle(struct device *dev, void *data)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct omap_device *od = to_omap_device(pdev);
+	int i;
+
+	if (!od)
+		return 0;
+
+	/*
+	 * If omap_device state is enabled, but has no driver bound,
+	 * idle it.
+	 */
+
+	/*
+	 * Some devices (like memory controllers) are always kept
+	 * enabled, and should not be idled even with no drivers.
+	 */
+	for (i = 0; i < od->hwmods_cnt; i++)
+		if (od->hwmods[i]->flags & HWMOD_INIT_NO_IDLE)
+			return 0;
+
+	if (od->_driver_status != BUS_NOTIFY_BOUND_DRIVER &&
+	    od->_driver_status != BUS_NOTIFY_BIND_DRIVER) {
+		if (od->_state == OMAP_DEVICE_STATE_ENABLED) {
+			dev_warn(dev, "%s: enabled but no driver.  Idling\n",
+				 __func__);
+			omap_device_idle(pdev);
+		}
+	}
+
+	return 0;
+}
+
+static int __init omap_device_late_init(void)
+{
+	bus_for_each_dev(&platform_bus_type, NULL, NULL, omap_device_late_idle);
+
+	WARN(!of_have_populated_dt(),
+		"legacy booting deprecated, please update to boot with .dts\n");
+
+	return 0;
+}
+omap_late_initcall_sync(omap_device_late_init);

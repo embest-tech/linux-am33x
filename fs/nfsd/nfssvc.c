@@ -391,6 +391,14 @@ static int nfsd_get_default_max_blksize(void)
 	return ret;
 }
 
+static struct svc_serv_ops nfsd_thread_sv_ops = {
+	.svo_shutdown		= nfsd_last_thread,
+	.svo_function		= nfsd,
+	.svo_enqueue_xprt	= svc_xprt_do_enqueue,
+	.svo_setup		= svc_set_num_threads,
+	.svo_module		= THIS_MODULE,
+};
+
 int nfsd_create_serv(struct net *net)
 {
 	int error;
@@ -405,7 +413,7 @@ int nfsd_create_serv(struct net *net)
 		nfsd_max_blksize = nfsd_get_default_max_blksize();
 	nfsd_reset_versions();
 	nn->nfsd_serv = svc_create_pooled(&nfsd_program, nfsd_max_blksize,
-				      nfsd_last_thread, nfsd, THIS_MODULE);
+						&nfsd_thread_sv_ops);
 	if (nn->nfsd_serv == NULL)
 		return -ENOMEM;
 
@@ -500,8 +508,8 @@ int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 	/* apply the new numbers */
 	svc_get(nn->nfsd_serv);
 	for (i = 0; i < n; i++) {
-		err = svc_set_num_threads(nn->nfsd_serv, &nn->nfsd_serv->sv_pools[i],
-				    	  nthreads[i]);
+		err = nn->nfsd_serv->sv_ops->svo_setup(nn->nfsd_serv,
+				&nn->nfsd_serv->sv_pools[i], nthreads[i]);
 		if (err)
 			break;
 	}
@@ -540,7 +548,8 @@ nfsd_svc(int nrservs, struct net *net)
 	error = nfsd_startup_net(nrservs, net);
 	if (error)
 		goto out_destroy;
-	error = svc_set_num_threads(nn->nfsd_serv, NULL, nrservs);
+	error = nn->nfsd_serv->sv_ops->svo_setup(nn->nfsd_serv,
+			NULL, nrservs);
 	if (error)
 		goto out_shutdown;
 	/* We are holding a reference to nn->nfsd_serv which
@@ -647,6 +656,37 @@ static __be32 map_new_errors(u32 vers, __be32 nfserr)
 	return nfserr;
 }
 
+/*
+ * A write procedure can have a large argument, and a read procedure can
+ * have a large reply, but no NFSv2 or NFSv3 procedure has argument and
+ * reply that can both be larger than a page.  The xdr code has taken
+ * advantage of this assumption to be a sloppy about bounds checking in
+ * some cases.  Pending a rewrite of the NFSv2/v3 xdr code to fix that
+ * problem, we enforce these assumptions here:
+ */
+static bool nfs_request_too_big(struct svc_rqst *rqstp,
+				struct svc_procedure *proc)
+{
+	/*
+	 * The ACL code has more careful bounds-checking and is not
+	 * susceptible to this problem:
+	 */
+	if (rqstp->rq_prog != NFS_PROGRAM)
+		return false;
+	/*
+	 * Ditto NFSv4 (which can in theory have argument and reply both
+	 * more than a page):
+	 */
+	if (rqstp->rq_vers >= 4)
+		return false;
+	/* The reply will be small, we're OK: */
+	if (proc->pc_xdrressize > 0 &&
+	    proc->pc_xdrressize < XDR_QUADLEN(PAGE_SIZE))
+		return false;
+
+	return rqstp->rq_arg.len > PAGE_SIZE;
+}
+
 int
 nfsd_dispatch(struct svc_rqst *rqstp, __be32 *statp)
 {
@@ -659,6 +699,11 @@ nfsd_dispatch(struct svc_rqst *rqstp, __be32 *statp)
 				rqstp->rq_vers, rqstp->rq_proc);
 	proc = rqstp->rq_procinfo;
 
+	if (nfs_request_too_big(rqstp, proc)) {
+		dprintk("nfsd: NFSv%d argument too large\n", rqstp->rq_vers);
+		*statp = rpc_garbage_args;
+		return 1;
+	}
 	/*
 	 * Give the xdr decoder a chance to change this if it wants
 	 * (necessary in the NFSv4.0 compound case)

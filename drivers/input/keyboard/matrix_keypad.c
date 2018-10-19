@@ -25,7 +25,6 @@
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/of_platform.h>
-#include <linux/pinctrl/consumer.h>
 
 struct matrix_keypad {
 	const struct matrix_keypad_platform_data *pdata;
@@ -281,8 +280,6 @@ static int matrix_keypad_suspend(struct device *dev)
 	if (device_may_wakeup(&pdev->dev))
 		matrix_keypad_enable_wakeup(keypad);
 
-	pinctrl_pm_select_sleep_state(dev);
-
 	return 0;
 }
 
@@ -293,8 +290,6 @@ static int matrix_keypad_resume(struct device *dev)
 
 	if (device_may_wakeup(&pdev->dev))
 		matrix_keypad_disable_wakeup(keypad);
-
-	pinctrl_pm_select_default_state(dev);
 
 	matrix_keypad_start(keypad->input_dev);
 
@@ -430,8 +425,10 @@ matrix_keypad_parse_dt(struct device *dev)
 
 	if (of_get_property(np, "linux,no-autorepeat", NULL))
 		pdata->no_autorepeat = true;
-	if (of_get_property(np, "linux,wakeup", NULL))
-		pdata->wakeup = true;
+
+	pdata->wakeup = of_property_read_bool(np, "wakeup-source") ||
+			of_property_read_bool(np, "linux,wakeup"); /* legacy */
+
 	if (of_get_property(np, "gpio-activelow", NULL))
 		pdata->active_low = true;
 

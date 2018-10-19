@@ -55,7 +55,6 @@ DECLARE_BITMAP(state_support, CPS_PM_STATE_COUNT);
  * state. Actually per-core rather than per-CPU.
  */
 static DEFINE_PER_CPU_ALIGNED(u32*, ready_count);
-static DEFINE_PER_CPU_ALIGNED(void*, ready_count_alloc);
 
 /* Indicates online CPUs coupled with the current CPU */
 static DEFINE_PER_CPU_ALIGNED(cpumask_t, online_coupled);
@@ -267,6 +266,7 @@ static int __init cps_gen_flush_fsb(u32 **pp, struct uasm_label **pl,
 
 	/* CPUs which do not require the workaround */
 	case CPU_P5600:
+	case CPU_I6400:
 		return 0;
 
 	default:
@@ -624,7 +624,6 @@ static int __init cps_gen_core_entries(unsigned cpu)
 {
 	enum cps_pm_state state;
 	unsigned core = cpu_data[cpu].core;
-	unsigned dlinesz = cpu_data[cpu].dcache.linesz;
 	void *entry_fn, *core_rc;
 
 	for (state = CPS_PM_NC_WAIT; state < CPS_PM_STATE_COUNT; state++) {
@@ -644,16 +643,11 @@ static int __init cps_gen_core_entries(unsigned cpu)
 	}
 
 	if (!per_cpu(ready_count, core)) {
-		core_rc = kmalloc(dlinesz * 2, GFP_KERNEL);
+		core_rc = kmalloc(sizeof(u32), GFP_KERNEL);
 		if (!core_rc) {
 			pr_err("Failed allocate core %u ready_count\n", core);
 			return -ENOMEM;
 		}
-		per_cpu(ready_count_alloc, core) = core_rc;
-
-		/* Ensure ready_count is aligned to a cacheline boundary */
-		core_rc += dlinesz - 1;
-		core_rc = (void *)((unsigned long)core_rc & ~(dlinesz - 1));
 		per_cpu(ready_count, core) = core_rc;
 	}
 
@@ -671,6 +665,7 @@ static int __init cps_pm_init(void)
 	case CPU_PROAPTIV:
 	case CPU_M5150:
 	case CPU_P5600:
+	case CPU_I6400:
 		stype_intervention = 0x2;
 		stype_memory = 0x3;
 		stype_ordering = 0x10;

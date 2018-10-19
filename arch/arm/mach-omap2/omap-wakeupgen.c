@@ -20,6 +20,7 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/irq.h>
+#include <linux/irqchip.h>
 #include <linux/irqdomain.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
@@ -56,14 +57,6 @@ static unsigned int irq_target_cpu[MAX_IRQS];
 static unsigned int irq_banks = DEFAULT_NR_REG_BANKS;
 static unsigned int max_irqs = DEFAULT_IRQS;
 static unsigned int omap_secure_apis;
-static unsigned int wakeupgen_context[MAX_NR_REG_BANKS];
-
-struct omap_wakeupgen_ops {
-	void (*save_context)(void);
-	void (*restore_context)(void);
-};
-
-static struct omap_wakeupgen_ops *wakeupgen_ops;
 
 /*
  * Static helper functions.
@@ -271,16 +264,6 @@ static inline void omap5_irq_save_context(void)
 
 }
 
-static inline void am43xx_irq_save_context(void)
-{
-	u32 i;
-
-	for (i = 0; i < irq_banks; i++) {
-		wakeupgen_context[i] = wakeupgen_readl(i, 0);
-		wakeupgen_writel(0, i, CPU0_ID);
-	}
-}
-
 /*
  * Save WakeupGen interrupt context in SAR BANK3. Restore is done by
  * ROM code. WakeupGen IP is integrated along with GIC to manage the
@@ -293,8 +276,11 @@ static void irq_save_context(void)
 {
 	if (!sar_base)
 		sar_base = omap4_get_sar_ram_base();
-	if (wakeupgen_ops && wakeupgen_ops->save_context)
-		wakeupgen_ops->save_context();
+
+	if (soc_is_omap54xx())
+		omap5_irq_save_context();
+	else
+		omap4_irq_save_context();
 }
 
 /*
@@ -311,20 +297,6 @@ static void irq_sar_clear(void)
 	val = readl_relaxed(sar_base + offset);
 	val &= ~SAR_BACKUP_STATUS_WAKEUPGEN;
 	writel_relaxed(val, sar_base + offset);
-}
-
-static void am43xx_irq_restore_context(void)
-{
-	u32 i;
-
-	for (i = 0; i < irq_banks; i++)
-		wakeupgen_writel(wakeupgen_context[i], i, CPU0_ID);
-}
-
-static void irq_restore_context(void)
-{
-	if (wakeupgen_ops && wakeupgen_ops->restore_context)
-		wakeupgen_ops->restore_context();
 }
 
 /*
@@ -359,7 +331,7 @@ static int irq_cpu_hotplug_notify(struct notifier_block *self,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block __refdata irq_hotplug_notifier = {
+static struct notifier_block irq_hotplug_notifier = {
 	.notifier_call = irq_cpu_hotplug_notify,
 };
 
@@ -384,7 +356,7 @@ static int irq_notifier(struct notifier_block *self, unsigned long cmd,	void *v)
 		break;
 	case CPU_CLUSTER_PM_EXIT:
 		if (omap_type() == OMAP2_DEVICE_TYPE_GP)
-			irq_restore_context();
+			irq_sar_clear();
 		break;
 	}
 	return NOTIFY_OK;
@@ -428,40 +400,42 @@ static struct irq_chip wakeupgen_chip = {
 #endif
 };
 
-static int wakeupgen_domain_xlate(struct irq_domain *domain,
-				  struct device_node *controller,
-				  const u32 *intspec,
-				  unsigned int intsize,
-				  unsigned long *out_hwirq,
-				  unsigned int *out_type)
+static int wakeupgen_domain_translate(struct irq_domain *d,
+				      struct irq_fwspec *fwspec,
+				      unsigned long *hwirq,
+				      unsigned int *type)
 {
-	if (domain->of_node != controller)
-		return -EINVAL;	/* Shouldn't happen, really... */
-	if (intsize != 3)
-		return -EINVAL;	/* Not GIC compliant */
-	if (intspec[0] != 0)
-		return -EINVAL;	/* No PPI should point to this domain */
+	if (is_of_node(fwspec->fwnode)) {
+		if (fwspec->param_count != 3)
+			return -EINVAL;
 
-	*out_hwirq = intspec[1];
-	*out_type = intspec[2];
-	return 0;
+		/* No PPI should point to this domain */
+		if (fwspec->param[0] != 0)
+			return -EINVAL;
+
+		*hwirq = fwspec->param[1];
+		*type = fwspec->param[2];
+		return 0;
+	}
+
+	return -EINVAL;
 }
 
 static int wakeupgen_domain_alloc(struct irq_domain *domain,
 				  unsigned int virq,
 				  unsigned int nr_irqs, void *data)
 {
-	struct of_phandle_args *args = data;
-	struct of_phandle_args parent_args;
+	struct irq_fwspec *fwspec = data;
+	struct irq_fwspec parent_fwspec;
 	irq_hw_number_t hwirq;
 	int i;
 
-	if (args->args_count != 3)
+	if (fwspec->param_count != 3)
 		return -EINVAL;	/* Not GIC compliant */
-	if (args->args[0] != 0)
+	if (fwspec->param[0] != 0)
 		return -EINVAL;	/* No PPI should point to this domain */
 
-	hwirq = args->args[1];
+	hwirq = fwspec->param[1];
 	if (hwirq >= MAX_IRQS)
 		return -EINVAL;	/* Can't deal with this */
 
@@ -469,32 +443,16 @@ static int wakeupgen_domain_alloc(struct irq_domain *domain,
 		irq_domain_set_hwirq_and_chip(domain, virq + i, hwirq + i,
 					      &wakeupgen_chip, NULL);
 
-	parent_args = *args;
-	parent_args.np = domain->parent->of_node;
-	return irq_domain_alloc_irqs_parent(domain, virq, nr_irqs, &parent_args);
+	parent_fwspec = *fwspec;
+	parent_fwspec.fwnode = domain->parent->fwnode;
+	return irq_domain_alloc_irqs_parent(domain, virq, nr_irqs,
+					    &parent_fwspec);
 }
 
-static struct irq_domain_ops wakeupgen_domain_ops = {
-	.xlate	= wakeupgen_domain_xlate,
-	.alloc	= wakeupgen_domain_alloc,
-	.free	= irq_domain_free_irqs_common,
-};
-
-/* Define ops for context save and restore for each SoC */
-
-static struct omap_wakeupgen_ops omap4_wakeupgen_ops = {
-	.save_context = omap4_irq_save_context,
-	.restore_context = irq_sar_clear,
-};
-
-static struct omap_wakeupgen_ops omap5_wakeupgen_ops = {
-	.save_context = omap5_irq_save_context,
-	.restore_context = irq_sar_clear,
-};
-
-static struct omap_wakeupgen_ops am43xx_wakeupgen_ops = {
-	.save_context = am43xx_irq_save_context,
-	.restore_context = am43xx_irq_restore_context,
+static const struct irq_domain_ops wakeupgen_domain_ops = {
+	.translate	= wakeupgen_domain_translate,
+	.alloc		= wakeupgen_domain_alloc,
+	.free		= irq_domain_free_irqs_common,
 };
 
 /*
@@ -533,13 +491,9 @@ static int __init wakeupgen_init(struct device_node *node,
 		irq_banks = OMAP4_NR_BANKS;
 		max_irqs = OMAP4_NR_IRQS;
 		omap_secure_apis = 1;
-		wakeupgen_ops = &omap4_wakeupgen_ops;
-	} else if (soc_is_omap54xx()) {
-		wakeupgen_ops = &omap5_wakeupgen_ops;
 	} else if (soc_is_am43xx()) {
 		irq_banks = AM43XX_NR_REG_BANKS;
 		max_irqs = AM43XX_IRQS;
-		wakeupgen_ops = &am43xx_wakeupgen_ops;
 	}
 
 	domain = irq_domain_add_hierarchy(parent_domain, 0, max_irqs,
@@ -587,9 +541,4 @@ static int __init wakeupgen_init(struct device_node *node,
 
 	return 0;
 }
-
-/*
- * We cannot use the IRQCHIP_DECLARE macro that lives in
- * drivers/irqchip, so we're forced to roll our own. Not very nice.
- */
-OF_DECLARE_2(irqchip, ti_wakeupgen, "ti,omap4-wugen-mpu", wakeupgen_init);
+IRQCHIP_DECLARE(ti_wakeupgen, "ti,omap4-wugen-mpu", wakeupgen_init);

@@ -36,7 +36,6 @@
  */
 
 #include <linux/clk.h>
-#include <linux/clk-provider.h>
 #include <linux/module.h>
 #include <linux/io.h>
 #include <linux/device.h>
@@ -485,10 +484,6 @@ int omap_dm_timer_set_source(struct omap_dm_timer *timer, int source)
 	char *parent_name = NULL;
 	struct clk *parent;
 	struct dmtimer_platform_data *pdata;
-
-	/* Check if the clock has parents if not no point checking */
-	if (!__clk_get_num_parents(timer->fclk))
-		return 0;
 
 	if (unlikely(!timer))
 		return -EINVAL;

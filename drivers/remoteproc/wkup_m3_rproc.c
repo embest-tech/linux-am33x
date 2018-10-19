@@ -88,8 +88,7 @@ static int wkup_m3_rproc_stop(struct rproc *rproc)
 	return 0;
 }
 
-static void *wkup_m3_rproc_da_to_va(struct rproc *rproc, u64 da, int len,
-				    u32 flags)
+static void *wkup_m3_rproc_da_to_va(struct rproc *rproc, u64 da, int len)
 {
 	struct wkup_m3_rproc *wkupm3 = rproc->priv;
 	void *va = NULL;

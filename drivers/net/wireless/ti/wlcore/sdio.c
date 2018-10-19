@@ -293,7 +293,8 @@ static int wl1271_probe(struct sdio_func *func,
 	/* Use block mode for transferring over one block size of data */
 	func->card->quirks |= MMC_QUIRK_BLKSZ_FOR_BYTE_MODE;
 
-	if (wlcore_probe_of(&func->dev, &irq, &pdev_data))
+	ret = wlcore_probe_of(&func->dev, &irq, &pdev_data);
+	if (ret)
 		goto out_free_glue;
 
 	/* if sdio can keep power while host is suspended, enable wow */
@@ -390,16 +391,8 @@ static int wl1271_suspend(struct device *dev)
 	dev_dbg(dev, "wl1271 suspend. wow_enabled: %d\n",
 		wl->wow_enabled);
 
-	/*
-	 * check whether sdio should keep power.
-	 * due to some mmc layer issues, the system automatically
-	 * powers us up on resume, which later cause issues when
-	 * we try to restore_power again explicitly.
-	 * workaround it by always asking to keep power. this is
-	 * fine as the driver controls the chip power anyway.
-	 * TODO: remove it when mmc issue is fixed.
-	 */
-	if (true || wl->wow_enabled) {
+	/* check whether sdio should keep power */
+	if (wl->wow_enabled) {
 		sdio_flags = sdio_get_host_pm_caps(func);
 
 		if (!(sdio_flags & MMC_PM_KEEP_POWER)) {

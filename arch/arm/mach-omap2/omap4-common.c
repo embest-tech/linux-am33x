@@ -135,7 +135,7 @@ static int __init omap4_sram_init(void)
 	if (!np)
 		pr_warn("%s:Unable to allocate sram needed to handle errata I688\n",
 			__func__);
-	sram_pool = of_get_named_gen_pool(np, "sram", 0);
+	sram_pool = of_gen_pool_get(np, "sram", 0);
 	if (!sram_pool)
 		pr_warn("%s:Unable to get sram pool needed to handle errata I688\n",
 			__func__);
@@ -169,6 +169,7 @@ void __init omap_barriers_init(void)
 
 	soc_mb = omap4_mb;
 }
+
 #endif
 
 void gic_dist_disable(void)

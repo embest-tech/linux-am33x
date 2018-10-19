@@ -80,7 +80,7 @@
 ENTRY(stext)
  ARM_BE8(setend	be )			@ ensure we are in BE8 mode
 
- THUMB(	adr	r9, BSYM(1f)	)	@ Kernel is always entered in ARM.
+ THUMB(	badr	r9, 1f		)	@ Kernel is always entered in ARM.
  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
  THUMB(	.thumb			)	@ switch to Thumb now.
  THUMB(1:			)
@@ -148,7 +148,7 @@ ENTRY(stext)
 	 */
 	ldr	r13, =__mmap_switched		@ address to jump to after
 						@ mmu has been enabled
-	adr	lr, BSYM(1f)			@ return (PIC) address
+	badr	lr, 1f				@ return (PIC) address
 #ifdef CONFIG_ARM_LPAE
 	mov	r5, #0				@ high TTBR0
 	mov	r8, r4, lsr #12			@ TTBR1 is swapper_pg_dir pfn
@@ -362,9 +362,9 @@ __turn_mmu_on_loc:
 
 #if defined(CONFIG_SMP)
 	.text
-ENTRY(secondary_startup_arm)
 	.arm
- THUMB(	adr	r9, BSYM(1f)	)	@ Kernel is entered in ARM.
+ENTRY(secondary_startup_arm)
+ THUMB(	badr	r9, 1f		)	@ Kernel is entered in ARM.
  THUMB(	bx	r9		)	@ If this is a Thumb-2 kernel,
  THUMB(	.thumb			)	@ switch to Thumb now.
  THUMB(1:			)
@@ -399,8 +399,11 @@ ENTRY(secondary_startup)
 	sub	lr, r4, r5			@ mmu has been enabled
 	add	r3, r7, lr
 	ldrd	r4, [r3, #0]			@ get secondary_data.pgdir
+ARM_BE8(eor	r4, r4, r5)			@ Swap r5 and r4 in BE:
+ARM_BE8(eor	r5, r4, r5)			@ it can be done in 3 steps
+ARM_BE8(eor	r4, r4, r5)			@ without using a temp reg.
 	ldr	r8, [r3, #8]			@ get secondary_data.swapper_pg_dir
-	adr	lr, BSYM(__enable_mmu)		@ return address
+	badr	lr, __enable_mmu		@ return address
 	mov	r13, r12			@ __secondary_switched address
 	ldr	r12, [r10, #PROCINFO_INITFUNC]
 	add	r12, r12, r10			@ initialise processor
@@ -461,10 +464,7 @@ __enable_mmu:
 #ifdef CONFIG_ARM_LPAE
 	mcrr	p15, 0, r4, r5, c2		@ load TTBR0
 #else
-	mov	r5, #(domain_val(DOMAIN_USER, DOMAIN_MANAGER) | \
-		      domain_val(DOMAIN_KERNEL, DOMAIN_MANAGER) | \
-		      domain_val(DOMAIN_TABLE, DOMAIN_MANAGER) | \
-		      domain_val(DOMAIN_IO, DOMAIN_CLIENT))
+	mov	r5, #DACR_INIT
 	mcr	p15, 0, r5, c3, c0, 0		@ load domain access register
 	mcr	p15, 0, r4, c2, c0, 0		@ load page table pointer
 #endif

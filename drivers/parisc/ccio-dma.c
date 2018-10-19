@@ -704,8 +704,6 @@ ccio_mark_invalid(struct ioc *ioc, dma_addr_t iova, size_t byte_cnt)
  * ccio_dma_supported - Verify the IOMMU supports the DMA address range.
  * @dev: The PCI device.
  * @mask: A bit mask describing the DMA address range of the device.
- *
- * This function implements the pci_dma_supported function.
  */
 static int 
 ccio_dma_supported(struct device *dev, u64 mask)
@@ -743,6 +741,8 @@ ccio_map_single(struct device *dev, void *addr, size_t size,
 
 	BUG_ON(!dev);
 	ioc = GET_IOC(dev);
+	if (!ioc)
+		return DMA_ERROR_CODE;
 
 	BUG_ON(size <= 0);
 
@@ -807,6 +807,10 @@ ccio_unmap_single(struct device *dev, dma_addr_t iova, size_t size,
 	
 	BUG_ON(!dev);
 	ioc = GET_IOC(dev);
+	if (!ioc) {
+		WARN_ON(!ioc);
+		return;
+	}
 
 	DBG_RUN("%s() iovp 0x%lx/%x\n",
 		__func__, (long)iova, size);
@@ -910,6 +914,8 @@ ccio_map_sg(struct device *dev, struct scatterlist *sglist, int nents,
 	
 	BUG_ON(!dev);
 	ioc = GET_IOC(dev);
+	if (!ioc)
+		return 0;
 	
 	DBG_RUN_SG("%s() START %d entries\n", __func__, nents);
 
@@ -982,6 +988,10 @@ ccio_unmap_sg(struct device *dev, struct scatterlist *sglist, int nents,
 
 	BUG_ON(!dev);
 	ioc = GET_IOC(dev);
+	if (!ioc) {
+		WARN_ON(!ioc);
+		return;
+	}
 
 	DBG_RUN_SG("%s() START %d entries, %p,%x\n",
 		__func__, nents, sg_virt(sglist), sglist->length);
@@ -1103,16 +1113,9 @@ static int ccio_proc_bitmap_info(struct seq_file *m, void *p)
 	struct ioc *ioc = ioc_list;
 
 	while (ioc != NULL) {
-		u32 *res_ptr = (u32 *)ioc->res_map;
-		int j;
-
-		for (j = 0; j < (ioc->res_size / sizeof(u32)); j++) {
-			if ((j & 7) == 0)
-				seq_puts(m, "\n   ");
-			seq_printf(m, "%08x", *res_ptr);
-			res_ptr++;
-		}
-		seq_puts(m, "\n\n");
+		seq_hex_dump(m, "   ", DUMP_PREFIX_NONE, 32, 4, ioc->res_map,
+			     ioc->res_size, false);
+		seq_putc(m, '\n');
 		ioc = ioc->next;
 		break; /* XXX - remove me */
 	}

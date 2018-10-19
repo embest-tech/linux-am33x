@@ -306,6 +306,20 @@ void devm_clk_put(struct device *dev, struct clk *clk);
  * @clk: clock source
  * @rate: desired clock rate in Hz
  *
+ * This answers the question "if I were to pass @rate to clk_set_rate(),
+ * what clock rate would I end up with?" without changing the hardware
+ * in any way.  In other words:
+ *
+ *   rate = clk_round_rate(clk, r);
+ *
+ * and:
+ *
+ *   clk_set_rate(clk, r);
+ *   rate = clk_get_rate(clk);
+ *
+ * are equivalent except the former does not modify the clock hardware
+ * in any way.
+ *
  * Returns rounded clock rate in Hz, or negative errno.
  */
 long clk_round_rate(struct clk *clk, unsigned long rate);
@@ -394,23 +408,6 @@ struct clk *clk_get_parent(struct clk *clk);
  */
 struct clk *clk_get_sys(const char *dev_id, const char *con_id);
 
-/**
- * clks_save_context - save clock context for poweroff
-+ *
- * Saves the context of the clock register for powerstates in which the
- * contents of the registers will be lost. Occurs deep within the suspend
- * code so locking is not necessary.
- */
-int clks_save_context(void);
-
-/**
-+ * clks_restore_context - restore clock context after poweroff
- *
- * This occurs with all clocks enabled. Occurs deep within the resume code
- * so locking is not necessary.
- */
-void clks_restore_context(void);
-
 #else /* !CONFIG_HAVE_CLK */
 
 static inline struct clk *clk_get(struct device *dev, const char *id)
@@ -464,13 +461,6 @@ static inline struct clk *clk_get_parent(struct clk *clk)
 	return NULL;
 }
 
-static inline int clks_save_context(void)
-{
-	return 0;
-}
-
-static inline void clks_restore_context(void) {}
-
 #endif
 
 /* clk_prepare_enable helps cases using clk_enable in non-atomic context. */
@@ -494,19 +484,6 @@ static inline void clk_disable_unprepare(struct clk *clk)
 	clk_disable(clk);
 	clk_unprepare(clk);
 }
-
-/**
- * clk_add_alias - add a new clock alias
- * @alias: name for clock alias
- * @alias_dev_name: device name
- * @id: platform specific clock name
- * @dev: device
- *
- * Allows using generic clock names for drivers by adding a new alias.
- * Assumes clkdev, see clkdev.h for more info.
- */
-int clk_add_alias(const char *alias, const char *alias_dev_name, char *id,
-			struct device *dev);
 
 struct device_node;
 struct of_phandle_args;

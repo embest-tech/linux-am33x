@@ -351,8 +351,7 @@ int p54_setup_mac(struct p54_common *priv)
 		 * "TRANSPARENT and PROMISCUOUS are mutually exclusive"
 		 * STSW45X0C LMAC API - page 12
 		 */
-		if (((priv->filter_flags & FIF_PROMISC_IN_BSS) ||
-		     (priv->filter_flags & FIF_OTHER_BSS)) &&
+		if (priv->filter_flags & FIF_OTHER_BSS &&
 		    (mode != P54_FILTER_TYPE_PROMISCUOUS))
 			mode |= P54_FILTER_TYPE_TRANSPARENT;
 	} else {
@@ -489,7 +488,7 @@ int p54_scan(struct p54_common *priv, u16 mode, u16 dwell)
 
 			entry += sizeof(__le16);
 			chan->pa_points_per_curve = 8;
-			memset(chan->curve_data, 0, sizeof(*chan->curve_data));
+			memset(chan->curve_data, 0, sizeof(chan->curve_data));
 			memcpy(chan->curve_data, entry,
 			       sizeof(struct p54_pa_curve_data_sample) *
 			       min((u8)8, curve_data->points_per_channel));

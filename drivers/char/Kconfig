@@ -583,20 +583,14 @@ config TELCLOCK
 	  controlling the behavior of this hardware.
 
 config DEVPORT
-	bool
-	depends on !M68K
+	bool "/dev/port character device"
 	depends on ISA || PCI
 	default y
+	help
+	  Say Y here if you want to support the /dev/port device. The /dev/port
+	  device is similar to /dev/mem, but for I/O ports.
 
 source "drivers/s390/char/Kconfig"
-
-config MSM_SMD_PKT
-	bool "Enable device interface for some SMD packet ports"
-	default n
-	depends on MSM_SMD
-	help
-	  Enables userspace clients to read and write to some packet SMD
-	  ports via device interface for MSM chipset.
 
 config TILE_SROM
 	bool "Character-device access via hypervisor to the Tilera SPI ROM"
@@ -610,12 +604,6 @@ config TILE_SROM
 	  how to partition a single ROM for multiple purposes.
 
 source "drivers/char/xillybus/Kconfig"
-
-config BUZZER_GPIO
-    tristate "buzzer driver depend on gpio"
-    
-config RESET_GPIO
-    tristate "reset driver depend on gpio"
 
 endmenu
 

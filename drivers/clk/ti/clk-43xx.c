@@ -16,8 +16,11 @@
 
 #include <linux/kernel.h>
 #include <linux/list.h>
+#include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clk/ti.h>
+
+#include "clock.h"
 
 static struct ti_dt_clk am43xx_clks[] = {
 	DT_CLK(NULL, "clk_32768_ck", "clk_32768_ck"),
@@ -55,7 +58,6 @@ static struct ti_dt_clk am43xx_clks[] = {
 	DT_CLK(NULL, "smartreflex1_fck", "smartreflex1_fck"),
 	DT_CLK(NULL, "sha0_fck", "sha0_fck"),
 	DT_CLK(NULL, "aes0_fck", "aes0_fck"),
-	DT_CLK(NULL, "rng_fck", "rng_fck"),
 	DT_CLK(NULL, "timer1_fck", "timer1_fck"),
 	DT_CLK(NULL, "timer2_fck", "timer2_fck"),
 	DT_CLK(NULL, "timer3_fck", "timer3_fck"),
@@ -72,6 +74,7 @@ static struct ti_dt_clk am43xx_clks[] = {
 	DT_CLK(NULL, "clk_24mhz", "clk_24mhz"),
 	DT_CLK(NULL, "cpsw_125mhz_gclk", "cpsw_125mhz_gclk"),
 	DT_CLK(NULL, "cpsw_cpts_rft_clk", "cpsw_cpts_rft_clk"),
+	DT_CLK(NULL, "dpll_clksel_mac_clk", "dpll_clksel_mac_clk"),
 	DT_CLK(NULL, "gpio0_dbclk_mux_ck", "gpio0_dbclk_mux_ck"),
 	DT_CLK(NULL, "gpio0_dbclk", "gpio0_dbclk"),
 	DT_CLK(NULL, "gpio1_dbclk", "gpio1_dbclk"),

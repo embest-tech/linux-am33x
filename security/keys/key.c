@@ -278,7 +278,7 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 
 	key->index_key.desc_len = desclen;
 	key->index_key.description = kmemdup(desc, desclen + 1, GFP_KERNEL);
-	if (!key->description)
+	if (!key->index_key.description)
 		goto no_memory_3;
 
 	atomic_set(&key->usage, 1);
@@ -296,6 +296,8 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 		key->flags |= 1 << KEY_FLAG_IN_QUOTA;
 	if (flags & KEY_ALLOC_TRUSTED)
 		key->flags |= 1 << KEY_FLAG_TRUSTED;
+	if (flags & KEY_ALLOC_UID_KEYRING)
+		key->flags |= 1 << KEY_FLAG_UID_KEYRING;
 
 #ifdef KEY_DEBUGGING
 	key->magic = KEY_DEBUG_MAGIC;
@@ -554,7 +556,7 @@ int key_reject_and_link(struct key *key,
 	if (!test_bit(KEY_FLAG_INSTANTIATED, &key->flags)) {
 		/* mark the key as being negatively instantiated */
 		atomic_inc(&key->user->nikeys);
-		key->type_data.reject_error = -error;
+		key->reject_error = -error;
 		smp_wmb();
 		set_bit(KEY_FLAG_NEGATIVE, &key->flags);
 		set_bit(KEY_FLAG_INSTANTIATED, &key->flags);
@@ -578,7 +580,7 @@ int key_reject_and_link(struct key *key,
 
 	mutex_unlock(&key_construction_mutex);
 
-	if (keyring)
+	if (keyring && link_ret == 0)
 		__key_link_end(keyring, &key->index_key, edit);
 
 	/* wake up anyone waiting for a key to be constructed */
@@ -934,12 +936,11 @@ int key_update(key_ref_t key_ref, const void *payload, size_t plen)
 	/* the key must be writable */
 	ret = key_permission(key_ref, KEY_NEED_WRITE);
 	if (ret < 0)
-		goto error;
+		return ret;
 
 	/* attempt to update it if supported */
-	ret = -EOPNOTSUPP;
 	if (!key->type->update)
-		goto error;
+		return -EOPNOTSUPP;
 
 	memset(&prep, 0, sizeof(prep));
 	prep.data = payload;
@@ -1046,14 +1047,14 @@ int generic_key_instantiate(struct key *key, struct key_preparsed_payload *prep)
 
 	ret = key_payload_reserve(key, prep->quotalen);
 	if (ret == 0) {
-		key->type_data.p[0] = prep->type_data[0];
-		key->type_data.p[1] = prep->type_data[1];
-		rcu_assign_keypointer(key, prep->payload[0]);
-		key->payload.data2[1] = prep->payload[1];
-		prep->type_data[0] = NULL;
-		prep->type_data[1] = NULL;
-		prep->payload[0] = NULL;
-		prep->payload[1] = NULL;
+		rcu_assign_keypointer(key, prep->payload.data[0]);
+		key->payload.data[1] = prep->payload.data[1];
+		key->payload.data[2] = prep->payload.data[2];
+		key->payload.data[3] = prep->payload.data[3];
+		prep->payload.data[0] = NULL;
+		prep->payload.data[1] = NULL;
+		prep->payload.data[2] = NULL;
+		prep->payload.data[3] = NULL;
 	}
 	pr_devel("<==%s() = %d\n", __func__, ret);
 	return ret;

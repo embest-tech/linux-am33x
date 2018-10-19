@@ -113,6 +113,11 @@ struct ast_private {
 	struct ttm_bo_kmap_obj cache_kmap;
 	int next_cursor;
 	bool support_wide_screen;
+	enum {
+		ast_use_p2a,
+		ast_use_dt,
+		ast_use_defaults
+	} config_mode;
 
 	enum ast_tx_chip tx_chip_type;
 	u8 dp501_maxclk;
@@ -315,6 +320,7 @@ int ast_framebuffer_init(struct drm_device *dev,
 int ast_fbdev_init(struct drm_device *dev);
 void ast_fbdev_fini(struct drm_device *dev);
 void ast_fbdev_set_suspend(struct drm_device *dev, int state);
+void ast_fbdev_set_base(struct ast_private *ast, unsigned long gpu_addr);
 
 struct ast_bo {
 	struct ttm_buffer_object bo;

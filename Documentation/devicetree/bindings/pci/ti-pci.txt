@@ -24,8 +24,7 @@ PCIe Designware Controller
    interrupt-map : as specified in ../designware-pcie.txt
 
 Optional Property:
- - pcie-reset-gpio : Should be added if a gpio line is required to drive
-		     PERST# line
+ - gpios : Should be added if a gpio line is required to drive PERST# line
 
 Example:
 axi {

@@ -67,6 +67,10 @@ static __inline__ int atomic_##op##_return(int a, atomic_t *v)		\
 ATOMIC_OPS(add, add)
 ATOMIC_OPS(sub, subf)
 
+ATOMIC_OP(and, and)
+ATOMIC_OP(or, or)
+ATOMIC_OP(xor, xor)
+
 #undef ATOMIC_OPS
 #undef ATOMIC_OP_RETURN
 #undef ATOMIC_OP
@@ -304,6 +308,9 @@ static __inline__ long atomic64_##op##_return(long a, atomic64_t *v)	\
 
 ATOMIC64_OPS(add, add)
 ATOMIC64_OPS(sub, subf)
+ATOMIC64_OP(and, and)
+ATOMIC64_OP(or, or)
+ATOMIC64_OP(xor, xor)
 
 #undef ATOMIC64_OPS
 #undef ATOMIC64_OP_RETURN
@@ -453,7 +460,7 @@ static __inline__ int atomic64_add_unless(atomic64_t *v, long a, long u)
  * Atomically increments @v by 1, so long as @v is non-zero.
  * Returns non-zero if @v was non-zero, and zero otherwise.
  */
-static __inline__ long atomic64_inc_not_zero(atomic64_t *v)
+static __inline__ int atomic64_inc_not_zero(atomic64_t *v)
 {
 	long t1, t2;
 
@@ -472,7 +479,7 @@ static __inline__ long atomic64_inc_not_zero(atomic64_t *v)
 	: "r" (&v->counter)
 	: "cc", "xer", "memory");
 
-	return t1;
+	return t1 != 0;
 }
 
 #endif /* __powerpc64__ */

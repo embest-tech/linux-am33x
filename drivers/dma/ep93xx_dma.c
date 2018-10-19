@@ -325,6 +325,8 @@ static int m2p_hw_setup(struct ep93xx_dma_chan *edmac)
 		| M2P_CONTROL_ENABLE;
 	m2p_set_control(edmac, control);
 
+	edmac->buffer = 0;
+
 	return 0;
 }
 
@@ -1364,7 +1366,7 @@ static int __init ep93xx_dma_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static struct platform_device_id ep93xx_dma_driver_ids[] = {
+static const struct platform_device_id ep93xx_dma_driver_ids[] = {
 	{ "ep93xx-dma-m2p", 0 },
 	{ "ep93xx-dma-m2m", 1 },
 	{ },

@@ -16,11 +16,11 @@
 #include <linux/kernel.h>
 #include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
-#include <linux/pinctrl/consumer.h>
 
 struct gpio_led_data {
 	struct led_classdev cdev;
@@ -192,15 +192,17 @@ static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 			goto err;
 		}
 
-		np = of_node(child);
+		np = to_of_node(child);
 
 		if (fwnode_property_present(child, "label")) {
 			fwnode_property_read_string(child, "label", &led.name);
 		} else {
 			if (IS_ENABLED(CONFIG_OF) && !led.name && np)
 				led.name = np->name;
-			if (!led.name)
-				return ERR_PTR(-EINVAL);
+			if (!led.name) {
+				ret = -EINVAL;
+				goto err;
+			}
 		}
 		fwnode_property_read_string(child, "linux,default-trigger",
 					    &led.default_trigger);
@@ -218,18 +220,19 @@ static struct gpio_leds_priv *gpio_leds_create(struct platform_device *pdev)
 		if (fwnode_property_present(child, "retain-state-suspended"))
 			led.retain_state_suspended = 1;
 
-		ret = create_gpio_led(&led, &priv->leds[priv->num_leds++],
+		ret = create_gpio_led(&led, &priv->leds[priv->num_leds],
 				      dev, NULL);
 		if (ret < 0) {
 			fwnode_handle_put(child);
 			goto err;
 		}
+		priv->num_leds++;
 	}
 
 	return priv;
 
 err:
-	for (count = priv->num_leds - 2; count >= 0; count--)
+	for (count = priv->num_leds - 1; count >= 0; count--)
 		delete_gpio_led(&priv->leds[count]);
 	return ERR_PTR(ret);
 }
@@ -288,33 +291,25 @@ static int gpio_led_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int gpio_led_suspend(struct device *dev)
+static void gpio_led_shutdown(struct platform_device *pdev)
 {
-	/* Select sleep pin state */
-	pinctrl_pm_select_sleep_state(dev);
+	struct gpio_leds_priv *priv = platform_get_drvdata(pdev);
+	int i;
 
-	return 0;
+	for (i = 0; i < priv->num_leds; i++) {
+		struct gpio_led_data *led = &priv->leds[i];
+
+		gpio_led_set(&led->cdev, LED_OFF);
+	}
 }
-
-static int gpio_led_resume(struct device *dev)
-{
-	/* Select default pin state */
-	pinctrl_pm_select_default_state(dev);
-
-	return 0;
-}
-#endif
-
-static SIMPLE_DEV_PM_OPS(gpio_led_pm_ops, gpio_led_suspend, gpio_led_resume);
 
 static struct platform_driver gpio_led_driver = {
 	.probe		= gpio_led_probe,
 	.remove		= gpio_led_remove,
+	.shutdown	= gpio_led_shutdown,
 	.driver		= {
 		.name	= "leds-gpio",
 		.of_match_table = of_gpio_leds_match,
-		.pm	= &gpio_led_pm_ops,
 	},
 };
 

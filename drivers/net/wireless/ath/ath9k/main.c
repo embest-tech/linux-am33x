@@ -373,8 +373,13 @@ void ath9k_tasklet(unsigned long data)
 	struct ath_common *common = ath9k_hw_common(ah);
 	enum ath_reset_type type;
 	unsigned long flags;
-	u32 status = sc->intrstatus;
+	u32 status;
 	u32 rxmask;
+
+	spin_lock_irqsave(&sc->intr_lock, flags);
+	status = sc->intrstatus;
+	sc->intrstatus = 0;
+	spin_unlock_irqrestore(&sc->intr_lock, flags);
 
 	ath9k_ps_wakeup(sc);
 	spin_lock(&sc->sc_pcu_lock);
@@ -382,12 +387,6 @@ void ath9k_tasklet(unsigned long data)
 	if (status & ATH9K_INT_FATAL) {
 		type = RESET_TYPE_FATAL_INT;
 		ath9k_queue_reset(sc, type);
-
-		/*
-		 * Increment the ref. counter here so that
-		 * interrupts are enabled in the reset routine.
-		 */
-		atomic_inc(&ah->intr_ref_cnt);
 		ath_dbg(common, RESET, "FATAL: Skipping interrupts\n");
 		goto out;
 	}
@@ -403,11 +402,6 @@ void ath9k_tasklet(unsigned long data)
 			type = RESET_TYPE_BB_WATCHDOG;
 			ath9k_queue_reset(sc, type);
 
-			/*
-			 * Increment the ref. counter here so that
-			 * interrupts are enabled in the reset routine.
-			 */
-			atomic_inc(&ah->intr_ref_cnt);
 			ath_dbg(common, RESET,
 				"BB_WATCHDOG: Skipping interrupts\n");
 			goto out;
@@ -420,7 +414,6 @@ void ath9k_tasklet(unsigned long data)
 		if ((sc->gtt_cnt >= MAX_GTT_CNT) && !ath9k_hw_check_alive(ah)) {
 			type = RESET_TYPE_TX_GTT;
 			ath9k_queue_reset(sc, type);
-			atomic_inc(&ah->intr_ref_cnt);
 			ath_dbg(common, RESET,
 				"GTT: Skipping interrupts\n");
 			goto out;
@@ -477,7 +470,7 @@ void ath9k_tasklet(unsigned long data)
 	ath9k_btcoex_handle_interrupt(sc, status);
 
 	/* re-enable hardware interrupt */
-	ath9k_hw_enable_interrupts(ah);
+	ath9k_hw_resume_interrupts(ah);
 out:
 	spin_unlock(&sc->sc_pcu_lock);
 	ath9k_ps_restore(sc);
@@ -541,7 +534,9 @@ irqreturn_t ath_isr(int irq, void *dev)
 		return IRQ_NONE;
 
 	/* Cache the status */
-	sc->intrstatus = status;
+	spin_lock(&sc->intr_lock);
+	sc->intrstatus |= status;
+	spin_unlock(&sc->intr_lock);
 
 	if (status & SCHED_INTR)
 		sched = true;
@@ -587,7 +582,7 @@ chip_reset:
 
 	if (sched) {
 		/* turn off every interrupt */
-		ath9k_hw_disable_interrupts(ah);
+		ath9k_hw_kill_interrupts(ah);
 		tasklet_schedule(&sc->intr_tq);
 	}
 
@@ -938,6 +933,9 @@ static void ath9k_vif_iter(struct ath9k_vif_iter_data *iter_data,
 		if (avp->assoc && !iter_data->primary_sta)
 			iter_data->primary_sta = vif;
 		break;
+	case NL80211_IFTYPE_OCB:
+		iter_data->nocbs++;
+		break;
 	case NL80211_IFTYPE_ADHOC:
 		iter_data->nadhocs++;
 		if (vif->bss_conf.enable_beacon)
@@ -1111,6 +1109,8 @@ void ath9k_calculate_summary_state(struct ath_softc *sc,
 
 		if (iter_data.nmeshes)
 			ah->opmode = NL80211_IFTYPE_MESH_POINT;
+		else if (iter_data.nocbs)
+			ah->opmode = NL80211_IFTYPE_OCB;
 		else if (iter_data.nwds)
 			ah->opmode = NL80211_IFTYPE_AP;
 		else if (iter_data.nadhocs)
@@ -1444,8 +1444,7 @@ static int ath9k_config(struct ieee80211_hw *hw, u32 changed)
 }
 
 #define SUPPORTED_FILTERS			\
-	(FIF_PROMISC_IN_BSS |			\
-	FIF_ALLMULTI |				\
+	(FIF_ALLMULTI |				\
 	FIF_CONTROL |				\
 	FIF_PSPOLL |				\
 	FIF_OTHER_BSS |				\
@@ -1460,13 +1459,18 @@ static void ath9k_configure_filter(struct ieee80211_hw *hw,
 				   u64 multicast)
 {
 	struct ath_softc *sc = hw->priv;
+	struct ath_chanctx *ctx;
 	u32 rfilt;
 
 	changed_flags &= SUPPORTED_FILTERS;
 	*total_flags &= SUPPORTED_FILTERS;
 
 	spin_lock_bh(&sc->chan_lock);
-	sc->cur_chan->rxfilter = *total_flags;
+	ath_for_each_chanctx(sc, ctx)
+		ctx->rxfilter = *total_flags;
+#ifdef CONFIG_ATH9K_CHANNEL_CONTEXT
+	sc->offchannel.chan.rxfilter = *total_flags;
+#endif
 	spin_unlock_bh(&sc->chan_lock);
 
 	ath9k_ps_wakeup(sc);
@@ -1541,13 +1545,13 @@ static int ath9k_sta_state(struct ieee80211_hw *hw,
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	int ret = 0;
 
-	if (old_state == IEEE80211_STA_AUTH &&
-	    new_state == IEEE80211_STA_ASSOC) {
+	if (old_state == IEEE80211_STA_NOTEXIST &&
+	    new_state == IEEE80211_STA_NONE) {
 		ret = ath9k_sta_add(hw, vif, sta);
 		ath_dbg(common, CONFIG,
 			"Add station: %pM\n", sta->addr);
-	} else if (old_state == IEEE80211_STA_ASSOC &&
-		   new_state == IEEE80211_STA_AUTH) {
+	} else if (old_state == IEEE80211_STA_NONE &&
+		   new_state == IEEE80211_STA_NOTEXIST) {
 		ret = ath9k_sta_remove(hw, vif, sta);
 		ath_dbg(common, CONFIG,
 			"Remove station: %pM\n", sta->addr);
@@ -1756,7 +1760,8 @@ static void ath9k_bss_info_changed(struct ieee80211_hw *hw,
 		ath9k_calculate_summary_state(sc, avp->chanctx);
 	}
 
-	if (changed & BSS_CHANGED_IBSS) {
+	if ((changed & BSS_CHANGED_IBSS) ||
+	      (changed & BSS_CHANGED_OCB)) {
 		memcpy(common->curbssid, bss_conf->bssid, ETH_ALEN);
 		common->curaid = bss_conf->aid;
 		ath9k_hw_write_associd(sc->sc_ah);
@@ -1850,14 +1855,16 @@ static void ath9k_reset_tsf(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
 
 static int ath9k_ampdu_action(struct ieee80211_hw *hw,
 			      struct ieee80211_vif *vif,
-			      enum ieee80211_ampdu_mlme_action action,
-			      struct ieee80211_sta *sta,
-			      u16 tid, u16 *ssn, u8 buf_size)
+			      struct ieee80211_ampdu_params *params)
 {
 	struct ath_softc *sc = hw->priv;
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	bool flush = false;
 	int ret = 0;
+	struct ieee80211_sta *sta = params->sta;
+	enum ieee80211_ampdu_mlme_action action = params->action;
+	u16 tid = params->tid;
+	u16 *ssn = &params->ssn;
 
 	mutex_lock(&sc->mutex);
 
@@ -2247,7 +2254,7 @@ static void ath9k_cancel_pending_offchannel(struct ath_softc *sc)
 
 		del_timer_sync(&sc->offchannel.timer);
 		if (sc->offchannel.state >= ATH_OFFCHANNEL_ROC_START)
-			ath_roc_complete(sc, true);
+			ath_roc_complete(sc, ATH_ROC_COMPLETE_ABORT);
 	}
 
 	if (test_bit(ATH_OP_SCANNING, &common->op_flags)) {
@@ -2356,7 +2363,7 @@ static int ath9k_cancel_remain_on_channel(struct ieee80211_hw *hw)
 
 	if (sc->offchannel.roc_vif) {
 		if (sc->offchannel.state >= ATH_OFFCHANNEL_ROC_START)
-			ath_roc_complete(sc, true);
+			ath_roc_complete(sc, ATH_ROC_COMPLETE_CANCEL);
 	}
 
 	mutex_unlock(&sc->mutex);

@@ -209,63 +209,30 @@ int wl18xx_process_mailbox_events(struct wl1271 *wl)
 	if (vector & RX_BA_WIN_SIZE_CHANGE_EVENT_ID) {
 		struct wl12xx_vif *wlvif;
 		struct ieee80211_vif *vif;
-		u8 role_id = mbox->rx_ba_role_id;
+		struct ieee80211_sta *sta;
 		u8 link_id = mbox->rx_ba_link_id;
 		u8 win_size = mbox->rx_ba_win_size;
-		int prev_win_size;
-
-		wl1271_debug(DEBUG_EVENT,
-			     "%s. role_id=%u link_id=%u win_size=%u",
-			     "RX_BA_WIN_SIZE_CHANGE_EVENT_ID",
-			     role_id, link_id, win_size);
+		const u8 *addr;
 
 		wlvif = wl->links[link_id].wlvif;
-		if (unlikely(!wlvif)) {
-			wl1271_error("%s. link_id wlvif is null",
-				     "RX_BA_WIN_SIZE_CHANGE_EVENT_ID");
-
-			goto out_event;
-		}
-
-		if (unlikely(wlvif->role_id != role_id)) {
-			wl1271_error("%s. wlvif has different role_id=%d",
-				     "RX_BA_WIN_SIZE_CHANGE_EVENT_ID",
-				     wlvif->role_id);
-
-			goto out_event;
-		}
-
-		prev_win_size = wlcore_rx_ba_max_subframes(wl, link_id);
-		if (unlikely(prev_win_size < 0)) {
-			wl1271_error("%s. cannot get link rx_ba_max_subframes",
-				     "RX_BA_WIN_SIZE_CHANGE_EVENT_ID");
-
-			goto out_event;
-		}
-
-		if ((u8)prev_win_size <= win_size) {
-			/* This not supposed to happen unless a FW bug */
-			wl1271_error("%s. prev_win_size(%d) <= win_size(%d)",
-				       "RX_BA_WIN_SIZE_CHANGE_EVENT_ID",
-					prev_win_size, win_size);
-
-			goto out_event;
-		}
-
-		/*
-		 * Call MAC routine to update win_size and stop all link active
-		 * BA sessions. This routine returns 0 on failure or previous
-		 * win_size on success
-		 */
 		vif = wl12xx_wlvif_to_vif(wlvif);
-		ieee80211_change_rx_ba_max_subframes(vif,
-			(wlvif->bss_type != BSS_TYPE_AP_BSS ?
-				vif->bss_conf.bssid :
-				wl->links[link_id].addr),
-			win_size);
-	}
 
-out_event:
+		/* Update RX aggregation window size and call
+		 * MAC routine to stop active RX aggregations for this link
+		 */
+		if (wlvif->bss_type != BSS_TYPE_AP_BSS)
+			addr = vif->bss_conf.bssid;
+		else
+			addr = wl->links[link_id].addr;
+
+		sta = ieee80211_find_sta(vif, addr);
+		if (sta) {
+			sta->max_rx_aggregation_subframes = win_size;
+			ieee80211_stop_rx_ba_session(vif,
+						wl->links[link_id].ba_bitmap,
+						addr);
+		}
+	}
 
 	return 0;
 }

@@ -848,7 +848,9 @@ static void irda_usb_receive(struct urb *urb)
 		 * Jean II */
 		self->rx_defer_timer.function = irda_usb_rx_defer_expired;
 		self->rx_defer_timer.data = (unsigned long) urb;
-		mod_timer(&self->rx_defer_timer, jiffies + (10 * HZ / 1000));
+		mod_timer(&self->rx_defer_timer,
+			  jiffies + msecs_to_jiffies(10));
+
 		return;
 	}
 	
@@ -1075,7 +1077,7 @@ static int stir421x_patch_device(struct irda_usb_cb *self)
          * are "42101001.sb" or "42101002.sb"
          */
         sprintf(stir421x_fw_name, "4210%4X.sb",
-                self->usbdev->descriptor.bcdDevice);
+		le16_to_cpu(self->usbdev->descriptor.bcdDevice));
         ret = request_firmware(&fw, stir421x_fw_name, &self->usbdev->dev);
         if (ret < 0)
                 return ret;

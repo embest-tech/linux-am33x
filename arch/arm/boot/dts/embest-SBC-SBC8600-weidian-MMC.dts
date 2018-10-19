@@ -1,0 +1,22 @@
+/*
+ * Copyright (C) 2018 Embest Technology Co., Ltd., - http://www.embest-tech.com
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ */
+/*/dts-v1/;*/
+
+#include "embest-SBC-SBC8600-weidian-NAND.dts"
+
+&mmc1 {
+	status = "okay";
+};
+
+&uart5_pins {
+	pinctrl-single,pins = <
+		0x108 (PIN_INPUT_PULLUP | MUX_MODE3)    /* mii1_col.uart5_rxd */
+		0x144 (PIN_OUTPUT_PULLDOWN | MUX_MODE3) /* rmii1_ref_clk.uart5_txd */
+	>;
+};

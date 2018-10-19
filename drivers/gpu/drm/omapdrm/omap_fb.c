@@ -145,14 +145,6 @@ static uint32_t get_linear_addr(struct plane *plane,
 	return plane->paddr + offset;
 }
 
-bool omap_framebuffer_supports_rotation(struct drm_framebuffer *fb)
-{
-	struct omap_framebuffer *omap_fb = to_omap_framebuffer(fb);
-	struct plane *plane = &omap_fb->planes[0];
-
-	return omap_gem_flags(plane->bo) & OMAP_BO_TILED;
-}
-
 /* update ovl info for scanout, handles cases of multi-planar fb's, etc.
  */
 void omap_framebuffer_update_scanout(struct drm_framebuffer *fb,
@@ -179,7 +171,7 @@ void omap_framebuffer_update_scanout(struct drm_framebuffer *fb,
 		uint32_t w = win->src_w;
 		uint32_t h = win->src_h;
 
-		switch (win->rotation & 0xf) {
+		switch (win->rotation & DRM_ROTATE_MASK) {
 		default:
 			dev_err(fb->dev->dev, "invalid rotation: %02x",
 					(uint32_t)win->rotation);
@@ -217,7 +209,7 @@ void omap_framebuffer_update_scanout(struct drm_framebuffer *fb,
 		info->rotation_type = OMAP_DSS_ROT_TILER;
 		info->screen_width  = omap_gem_tiled_stride(plane->bo, orient);
 	} else {
-		switch (win->rotation & 0xf) {
+		switch (win->rotation & DRM_ROTATE_MASK) {
 		case 0:
 		case BIT(DRM_ROTATE_0):
 			/* OK */

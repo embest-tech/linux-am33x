@@ -1024,8 +1024,11 @@ static int irda_connect(struct socket *sock, struct sockaddr *uaddr,
 	}
 
 	/* Check if we have opened a local TSAP */
-	if (!self->tsap)
-		irda_open_tsap(self, LSAP_ANY, addr->sir_name);
+	if (!self->tsap) {
+		err = irda_open_tsap(self, LSAP_ANY, addr->sir_name);
+		if (err)
+			goto out;
+	}
 
 	/* Move to connecting socket, start sending Connect Requests */
 	sock->state = SS_CONNECTING;
@@ -1086,6 +1089,9 @@ static int irda_create(struct net *net, struct socket *sock, int protocol,
 	struct sock *sk;
 	struct irda_sock *self;
 
+	if (protocol < 0 || protocol > SK_PROTOCOL_MAX)
+		return -EINVAL;
+
 	if (net != &init_net)
 		return -EAFNOSUPPORT;
 
@@ -1100,7 +1106,7 @@ static int irda_create(struct net *net, struct socket *sock, int protocol,
 	}
 
 	/* Allocate networking socket */
-	sk = sk_alloc(net, PF_IRDA, GFP_KERNEL, &irda_proto);
+	sk = sk_alloc(net, PF_IRDA, GFP_KERNEL, &irda_proto, kern);
 	if (sk == NULL)
 		return -ENOMEM;
 
@@ -2123,8 +2129,7 @@ static int irda_setsockopt(struct socket *sock, int level, int optname,
 		}
 
 		/* Unregister any old registration */
-		if (self->skey)
-			irlmp_unregister_service(self->skey);
+		irlmp_unregister_service(self->skey);
 
 		self->skey = irlmp_register_service((__u16) opt);
 		break;
@@ -2222,7 +2227,7 @@ static int irda_getsockopt(struct socket *sock, int level, int optname,
 {
 	struct sock *sk = sock->sk;
 	struct irda_sock *self = irda_sk(sk);
-	struct irda_device_list list;
+	struct irda_device_list list = { 0 };
 	struct irda_device_info *discoveries;
 	struct irda_ias_set *	ias_opt;	/* IAS get/query params */
 	struct ias_object *	ias_obj;	/* Object in IAS */

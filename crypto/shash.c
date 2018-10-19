@@ -274,12 +274,14 @@ static int shash_async_finup(struct ahash_request *req)
 
 int shash_ahash_digest(struct ahash_request *req, struct shash_desc *desc)
 {
-	struct scatterlist *sg = req->src;
-	unsigned int offset = sg->offset;
 	unsigned int nbytes = req->nbytes;
+	struct scatterlist *sg;
+	unsigned int offset;
 	int err;
 
-	if (nbytes < min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset)) {
+	if (nbytes &&
+	    (sg = req->src, offset = sg->offset,
+	     nbytes < min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset))) {
 		void *data;
 
 		data = kmap_atomic(sg_page(sg));
@@ -354,9 +356,10 @@ int crypto_init_shash_ops_async(struct crypto_tfm *tfm)
 	crt->final = shash_async_final;
 	crt->finup = shash_async_finup;
 	crt->digest = shash_async_digest;
+	crt->setkey = shash_async_setkey;
 
-	if (alg->setkey)
-		crt->setkey = shash_async_setkey;
+	crt->has_setkey = alg->setkey != shash_no_setkey;
+
 	if (alg->export)
 		crt->export = shash_async_export;
 	if (alg->import)
@@ -520,11 +523,6 @@ static int crypto_shash_init_tfm(struct crypto_tfm *tfm)
 	return 0;
 }
 
-static unsigned int crypto_shash_extsize(struct crypto_alg *alg)
-{
-	return alg->cra_ctxsize;
-}
-
 #ifdef CONFIG_NET
 static int crypto_shash_report(struct sk_buff *skb, struct crypto_alg *alg)
 {
@@ -564,7 +562,7 @@ static void crypto_shash_show(struct seq_file *m, struct crypto_alg *alg)
 
 static const struct crypto_type crypto_shash_type = {
 	.ctxsize = crypto_shash_ctxsize,
-	.extsize = crypto_shash_extsize,
+	.extsize = crypto_alg_extsize,
 	.init = crypto_init_shash_ops,
 	.init_tfm = crypto_shash_init_tfm,
 #ifdef CONFIG_PROC_FS

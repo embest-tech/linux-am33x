@@ -129,7 +129,6 @@ int of_get_display_timing(struct device_node *np, const char *name,
 }
 EXPORT_SYMBOL_GPL(of_get_display_timing);
 
-#if defined(CONFIG_SOC_AM33XX)
 static const char *dispmode = NULL;
 
 static int dispmode_setup(char *str)
@@ -143,10 +142,8 @@ __setup("dispmode=", dispmode_setup);
 static int match_native_mode(struct display_timings *disp, int width, int height)
 {
 	int i;
-
 	for (i = 0; i < disp->num_timings; i++) {
 		struct display_timing *dt = disp->timings[i];
-
 		if (dt->hactive.typ == width && dt->vactive.typ == height)
 			break;
 	}
@@ -156,7 +153,6 @@ static int match_native_mode(struct display_timings *disp, int width, int height
 	}
 	return i;
 }
-#endif
 
 /**
  * of_get_display_timings - parse all display_timing entries from a device_node
@@ -239,6 +235,7 @@ struct display_timings *of_get_display_timings(struct device_node *np)
 			 */
 			pr_err("%s: error in timing %d\n",
 				of_node_full_name(np), disp->num_timings + 1);
+			kfree(dt);
 			goto timingfail;
 		}
 
@@ -249,23 +246,18 @@ struct display_timings *of_get_display_timings(struct device_node *np)
 		disp->num_timings++;
 	}
 	of_node_put(timings_np);
-
-	/*
-	 * Designed for embest SBC8600: Choose the correct diplay_timing
-	 * according to bootargs dispmode.
-	 */
-#if defined(CONFIG_SOC_AM33XX)
-	if (!strncmp(dispmode, "4.3inch_LCD", 12))
-		disp->native_mode = match_native_mode(disp, 480, 272);
-	else if (!strncmp(dispmode, "7.0inch_LCD", 12))
-		disp->native_mode = match_native_mode(disp, 800, 480);
-	else if (!strncmp(dispmode, "VGA", 4))
-		disp->native_mode = match_native_mode(disp, 1024, 768);
-#endif
 	/*
 	 * native_mode points to the device_node returned by of_parse_phandle
 	 * therefore call of_node_put on it
 	 */
+	if (!strncmp(dispmode, "4.3inch_LCD", 12))
+		disp->native_mode = match_native_mode(disp, 480, 272);
+	else if (!strncmp(dispmode, "5.6inch_LCD", 12))
+		disp->native_mode = match_native_mode(disp, 640, 480);
+	else if (!strncmp(dispmode, "7.0inch_LCD", 12))
+		disp->native_mode = match_native_mode(disp, 800, 480);
+	else if (!strncmp(dispmode, "VGA", 4))
+		disp->native_mode = match_native_mode(disp, 1024, 768);
 	of_node_put(native_mode);
 
 	pr_debug("%s: got %d timings. Using timing #%d as default\n",

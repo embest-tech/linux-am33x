@@ -174,6 +174,31 @@ int cik_get_allowed_info_register(struct radeon_device *rdev,
 	}
 }
 
+/*
+ * Indirect registers accessor
+ */
+u32 cik_didt_rreg(struct radeon_device *rdev, u32 reg)
+{
+	unsigned long flags;
+	u32 r;
+
+	spin_lock_irqsave(&rdev->didt_idx_lock, flags);
+	WREG32(CIK_DIDT_IND_INDEX, (reg));
+	r = RREG32(CIK_DIDT_IND_DATA);
+	spin_unlock_irqrestore(&rdev->didt_idx_lock, flags);
+	return r;
+}
+
+void cik_didt_wreg(struct radeon_device *rdev, u32 reg, u32 v)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&rdev->didt_idx_lock, flags);
+	WREG32(CIK_DIDT_IND_INDEX, (reg));
+	WREG32(CIK_DIDT_IND_DATA, (v));
+	spin_unlock_irqrestore(&rdev->didt_idx_lock, flags);
+}
+
 /* get temperature in millidegrees */
 int ci_get_temp(struct radeon_device *rdev)
 {
@@ -4148,11 +4173,7 @@ void cik_ring_ib_execute(struct radeon_device *rdev, struct radeon_ib *ib)
 	control |= ib->length_dw | (vm_id << 24);
 
 	radeon_ring_write(ring, header);
-	radeon_ring_write(ring,
-#ifdef __BIG_ENDIAN
-			  (2 << 0) |
-#endif
-			  (ib->gpu_addr & 0xFFFFFFFC));
+	radeon_ring_write(ring, (ib->gpu_addr & 0xFFFFFFFC));
 	radeon_ring_write(ring, upper_32_bits(ib->gpu_addr) & 0xFFFF);
 	radeon_ring_write(ring, control);
 }
@@ -7741,7 +7762,7 @@ static inline void cik_irq_ack(struct radeon_device *rdev)
 		WREG32(DC_HPD5_INT_CONTROL, tmp);
 	}
 	if (rdev->irq.stat_regs.cik.disp_int_cont5 & DC_HPD6_INTERRUPT) {
-		tmp = RREG32(DC_HPD5_INT_CONTROL);
+		tmp = RREG32(DC_HPD6_INT_CONTROL);
 		tmp |= DC_HPDx_INT_ACK;
 		WREG32(DC_HPD6_INT_CONTROL, tmp);
 	}
@@ -7771,7 +7792,7 @@ static inline void cik_irq_ack(struct radeon_device *rdev)
 		WREG32(DC_HPD5_INT_CONTROL, tmp);
 	}
 	if (rdev->irq.stat_regs.cik.disp_int_cont5 & DC_HPD6_RX_INTERRUPT) {
-		tmp = RREG32(DC_HPD5_INT_CONTROL);
+		tmp = RREG32(DC_HPD6_INT_CONTROL);
 		tmp |= DC_HPDx_RX_INT_ACK;
 		WREG32(DC_HPD6_INT_CONTROL, tmp);
 	}
@@ -8447,7 +8468,7 @@ restart_ih:
 	if (queue_dp)
 		schedule_work(&rdev->dp_work);
 	if (queue_hotplug)
-		schedule_work(&rdev->hotplug_work);
+		schedule_delayed_work(&rdev->hotplug_work, 0);
 	if (queue_reset) {
 		rdev->needs_reset = true;
 		wake_up_all(&rdev->fence_queue);
@@ -9605,6 +9626,9 @@ static void dce8_program_watermarks(struct radeon_device *rdev,
 		    (rdev->disp_priority == 2)) {
 			DRM_DEBUG_KMS("force priority to high\n");
 		}
+
+		/* Save number of lines the linebuffer leads before the scanout */
+		radeon_crtc->lb_vblank_lead_lines = DIV_ROUND_UP(lb_size, mode->crtc_hdisplay);
 	}
 
 	/* select wm A */

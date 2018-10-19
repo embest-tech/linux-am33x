@@ -560,13 +560,13 @@ static int ipip6_err(struct sk_buff *skb, u32 info)
 
 	if (type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED) {
 		ipv4_update_pmtu(skb, dev_net(skb->dev), info,
-				 t->parms.link, 0, IPPROTO_IPV6, 0);
+				 t->parms.link, 0, iph->protocol, 0);
 		err = 0;
 		goto out;
 	}
 	if (type == ICMP_REDIRECT) {
 		ipv4_redirect(skb, dev_net(skb->dev), t->parms.link, 0,
-			      IPPROTO_IPV6, 0);
+			      iph->protocol, 0);
 		err = 0;
 		goto out;
 	}
@@ -681,14 +681,15 @@ static int ipip6_rcv(struct sk_buff *skb)
 		skb->mac_header = skb->network_header;
 		skb_reset_network_header(skb);
 		IPCB(skb)->flags = 0;
-		skb->protocol = htons(ETH_P_IPV6);
+		skb->dev = tunnel->dev;
 
 		if (packet_is_spoofed(skb, iph, tunnel)) {
 			tunnel->dev->stats.rx_errors++;
 			goto out;
 		}
 
-		__skb_tunnel_rx(skb, tunnel->dev, tunnel->net);
+		if (iptunnel_pull_header(skb, 0, htons(ETH_P_IPV6)))
+			goto out;
 
 		err = IP_ECN_decapsulate(iph, skb);
 		if (unlikely(err)) {
@@ -742,7 +743,7 @@ static int ipip_rcv(struct sk_buff *skb)
 			goto drop;
 		if (iptunnel_pull_header(skb, 0, tpi.proto))
 			goto drop;
-		return ip_tunnel_rcv(tunnel, skb, &tpi, log_ecn_error);
+		return ip_tunnel_rcv(tunnel, skb, &tpi, NULL, log_ecn_error);
 	}
 
 	return 1;
@@ -1388,40 +1389,27 @@ static int ipip6_tunnel_init(struct net_device *dev)
 	tunnel->dst_cache = alloc_percpu(struct ip_tunnel_dst);
 	if (!tunnel->dst_cache) {
 		free_percpu(dev->tstats);
+		dev->tstats = NULL;
 		return -ENOMEM;
 	}
 
 	return 0;
 }
 
-static int __net_init ipip6_fb_tunnel_init(struct net_device *dev)
+static void __net_init ipip6_fb_tunnel_init(struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	struct iphdr *iph = &tunnel->parms.iph;
 	struct net *net = dev_net(dev);
 	struct sit_net *sitn = net_generic(net, sit_net_id);
 
-	tunnel->dev = dev;
-	tunnel->net = dev_net(dev);
-
 	iph->version		= 4;
 	iph->protocol		= IPPROTO_IPV6;
 	iph->ihl		= 5;
 	iph->ttl		= 64;
 
-	dev->tstats = netdev_alloc_pcpu_stats(struct pcpu_sw_netstats);
-	if (!dev->tstats)
-		return -ENOMEM;
-
-	tunnel->dst_cache = alloc_percpu(struct ip_tunnel_dst);
-	if (!tunnel->dst_cache) {
-		free_percpu(dev->tstats);
-		return -ENOMEM;
-	}
-
 	dev_hold(dev);
 	rcu_assign_pointer(sitn->tunnels_wc[0], tunnel);
-	return 0;
 }
 
 static int ipip6_validate(struct nlattr *tb[], struct nlattr *data[])
@@ -1831,14 +1819,12 @@ static int __net_init sit_init_net(struct net *net)
 	 */
 	sitn->fb_tunnel_dev->features |= NETIF_F_NETNS_LOCAL;
 
-	err = ipip6_fb_tunnel_init(sitn->fb_tunnel_dev);
-	if (err)
-		goto err_dev_free;
-
-	ipip6_tunnel_clone_6rd(sitn->fb_tunnel_dev, sitn);
 	err = register_netdev(sitn->fb_tunnel_dev);
 	if (err)
 		goto err_reg_dev;
+
+	ipip6_tunnel_clone_6rd(sitn->fb_tunnel_dev, sitn);
+	ipip6_fb_tunnel_init(sitn->fb_tunnel_dev);
 
 	t = netdev_priv(sitn->fb_tunnel_dev);
 
@@ -1846,8 +1832,6 @@ static int __net_init sit_init_net(struct net *net)
 	return 0;
 
 err_reg_dev:
-	dev_put(sitn->fb_tunnel_dev);
-err_dev_free:
 	ipip6_dev_free(sitn->fb_tunnel_dev);
 err_alloc_dev:
 	return err;
