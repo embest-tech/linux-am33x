@@ -4,3 +4,6 @@
 *.csp
 *.dsp
 ihex2fw
+!am335x-bone-scale-data.bin
+!am335x-pm-firmware.elf
+!am335x-evm-scale-data.bin
